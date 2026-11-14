@@ -574,7 +574,7 @@ std::optional<JsonValue> parse(std::string_view input) {
 
 std::string stringify(const JsonValue& value, bool pretty) {
     std::string out;
-    out.reserve(pretty ? 16384 : 8192);
+    out.reserve(pretty ? 131072 : 65536);
     stringify_impl(out, value, pretty, 0);
     return out;
 }

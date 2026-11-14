@@ -1,4 +1,4 @@
-import { Facility, MapParcel, Company } from '../types/game';
+import { Facility, MapParcel, Company, CityBiome } from '../types/game';
 import {
   BuildingHitbox,
   Camera,
@@ -15,7 +15,7 @@ import {
   drawTickerBadge,
 } from './iso/buildingRenderer';
 import { RESIDENT_OWNER_ID } from './productsData';
-import { deterministicHash } from './precisionMath';
+import { drawFlatTexturedGroundTile, drawFlatWaterTile } from './terrainTextureEngine';
 
 export type { Camera, PooledParticle, MiniVehicle };
 
@@ -70,6 +70,9 @@ export class IsometricEngine {
   private groundCacheOriginX = 0;
   private groundCacheOriginY = 0;
   private bakedGridSize = 0;
+  private activeCityId = 'city_metro_1';
+  private activeBiome: CityBiome = 'coastal_metro';
+  private bakedCityKey = '';
 
   // Unified Pointer Events state
   private activePointers = new Map<number, { x: number; y: number }>();
@@ -117,11 +120,11 @@ export class IsometricEngine {
       { x: 2, y: 5, axis: 'x', laneCoord: 5, dir: 1, speed: 1.9, color: '#38bdf8' },
       { x: 24, y: 13, axis: 'x', laneCoord: 13, dir: -1, speed: 1.7, color: '#34d399' },
       { x: 6, y: 21, axis: 'x', laneCoord: 21, dir: 1, speed: 1.6, color: '#fbbf24' },
-      { x: 14, y: 27, axis: 'x', laneCoord: 27, dir: -1, speed: 1.5, color: '#e2e8f0' },
+      { x: 14, y: 29, axis: 'x', laneCoord: 29, dir: -1, speed: 1.5, color: '#e2e8f0' },
       { x: 5, y: 4, axis: 'y', laneCoord: 5, dir: 1, speed: 1.5, color: '#f87171' },
       { x: 13, y: 22, axis: 'y', laneCoord: 13, dir: -1, speed: 1.8, color: '#a78bfa' },
       { x: 21, y: 6, axis: 'y', laneCoord: 21, dir: 1, speed: 1.7, color: '#38bdf8' },
-      { x: 27, y: 16, axis: 'y', laneCoord: 27, dir: -1, speed: 1.4, color: '#fb923c' },
+      { x: 29, y: 16, axis: 'y', laneCoord: 29, dir: -1, speed: 1.4, color: '#fb923c' },
       { x: 16, y: 13, axis: 'x', laneCoord: 13, dir: 1, speed: 2.0, color: '#2dd4bf' },
       { x: 13, y: 9, axis: 'y', laneCoord: 13, dir: 1, speed: 1.4, color: '#facc15' },
     ];
@@ -491,6 +494,7 @@ export class IsometricEngine {
     this.groundCacheOriginX = originX;
     this.groundCacheOriginY = originY;
     this.bakedGridSize = this.gridSize;
+    this.bakedCityKey = `${this.activeCityId}_${this.activeBiome}`;
   }
 
   render(
@@ -506,13 +510,18 @@ export class IsometricEngine {
     const showTrafficOverlay = Boolean(options?.showTrafficOverlay);
     const showResourcesOverlay = Boolean(options?.showResourcesOverlay);
     const showResidentFocus = Boolean(options?.showResidentFocus);
-    const optsKey = `${showBadges ? 1 : 0}_${focusCompanyId || ''}_${showTrafficOverlay ? 1 : 0}_${showResourcesOverlay ? 1 : 0}_${showResidentFocus ? 1 : 0}`;
+    const nextCityId = options?.cityId || 'city_metro_1';
+    const nextBiome: CityBiome = options?.cityBiome || 'coastal_metro';
+    const nextCityKey = `${nextCityId}_${nextBiome}`;
+    const optsKey = `${showBadges ? 1 : 0}_${focusCompanyId || ''}_${showTrafficOverlay ? 1 : 0}_${showResourcesOverlay ? 1 : 0}_${showResidentFocus ? 1 : 0}_${nextCityKey}`;
 
     if (
       parcels !== this.lastParcelsRef ||
       facilities !== this.lastFacilitiesRef ||
       optsKey !== this.lastOptsKey
     ) {
+      this.activeCityId = nextCityId;
+      this.activeBiome = nextBiome;
       this.lastFacilitiesRef = facilities;
       this.lastOptsKey = optsKey;
       this.isDirty = true;
@@ -540,7 +549,7 @@ export class IsometricEngine {
     this.smokeTimer += dt;
 
     this.syncParcelGrid(parcels);
-    if (this.bakedGridSize !== this.gridSize && parcels.length > 0) {
+    if ((this.bakedGridSize !== this.gridSize || this.bakedCityKey !== nextCityKey) && parcels.length > 0) {
       this.bakeStaticGround();
     }
 
@@ -614,7 +623,18 @@ export class IsometricEngine {
         }
 
         if (parcel.terrainType === 'water') {
-          this.drawWaterTile(ctx, px, py, waterFill, waterStroke);
+          drawFlatWaterTile(
+            ctx,
+            px,
+            py,
+            this.tileWidth,
+            this.tileHeight,
+            waterFill,
+            waterStroke,
+            x,
+            y,
+            this.animTime
+          );
         } else {
           if (showTrafficOverlay && parcel.terrainType !== 'road') {
             this.drawTrafficHeatTile(ctx, px, py, parcel.trafficIndex ?? 20);
@@ -741,18 +761,6 @@ export class IsometricEngine {
     py: number,
     parcel: MapParcel
   ) {
-    const hw = this.tileWidth * 0.5;
-    const hh = this.tileHeight * 0.5;
-    const seed = deterministicHash(`tile_${parcel.x}_${parcel.y}`);
-
-    ctx.beginPath();
-    ctx.moveTo(px, py - hh);
-    ctx.lineTo(px + hw, py);
-    ctx.lineTo(px, py + hh);
-    ctx.lineTo(px - hw, py);
-    ctx.closePath();
-
-    // Check coastal shoreline neighbor (draw sandy/stone harbor edge beneath border)
     const eastWater =
       parcel.x + 1 < this.gridSize &&
       this.parcelGrid[parcel.y * this.gridSize + (parcel.x + 1)]?.terrainType === 'water';
@@ -760,138 +768,18 @@ export class IsometricEngine {
       parcel.y + 1 < this.gridSize &&
       this.parcelGrid[(parcel.y + 1) * this.gridSize + parcel.x]?.terrainType === 'water';
 
-    if (parcel.terrainType === 'road') {
-      ctx.fillStyle = '#252c38';
-      ctx.fill();
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 1.1;
-      ctx.stroke();
-
-      const isIntersection =
-        (parcel.x === 5 || parcel.x === 13 || parcel.x === 21 || parcel.x === 27) &&
-        (parcel.y === 5 || parcel.y === 13 || parcel.y === 21 || parcel.y === 27);
-
-      if (isIntersection) {
-        // Crosswalk markings at arterial intersections
-        ctx.strokeStyle = 'rgba(248, 250, 252, 0.65)';
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(px - 8, py - 2);
-        ctx.lineTo(px - 3, py - 4.5);
-        ctx.moveTo(px + 3, py + 4.5);
-        ctx.lineTo(px + 8, py + 2);
-        ctx.moveTo(px - 8, py + 2);
-        ctx.lineTo(px - 3, py + 4.5);
-        ctx.moveTo(px + 3, py - 4.5);
-        ctx.lineTo(px + 8, py - 2);
-        ctx.stroke();
-      } else {
-        const isYRoad = parcel.x === 5 || parcel.x === 13 || parcel.x === 21 || parcel.x === 27;
-        ctx.beginPath();
-        if (isYRoad) {
-          ctx.moveTo(px + hw * 0.35, py - hh * 0.35);
-          ctx.lineTo(px - hw * 0.35, py + hh * 0.35);
-        } else {
-          ctx.moveTo(px - hw * 0.35, py - hh * 0.35);
-          ctx.lineTo(px + hw * 0.35, py + hh * 0.35);
-        }
-        ctx.strokeStyle = '#eab308';
-        ctx.setLineDash([3, 3.5]);
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      return;
-    }
-
-    if (parcel.terrainType === 'industrial_zone') {
-      ctx.fillStyle = seed % 2 === 0 ? '#343844' : '#2e323d';
-      ctx.fill();
-      ctx.strokeStyle = '#474c5c';
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-
-      // Subtle industrial asphalt speckles
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-      ctx.fillRect(px - 6 + (seed % 9), py - 2 + (seed % 4), 2, 1);
-      ctx.fillRect(px + 3 - (seed % 7), py + 2 - (seed % 5), 2, 1);
-    } else if (parcel.terrainType === 'pavement') {
-      ctx.fillStyle = seed % 2 === 0 ? '#465366' : '#3f4b5e';
-      ctx.fill();
-      ctx.strokeStyle = '#5c6b82';
-      ctx.lineWidth = 0.85;
-      ctx.stroke();
-
-      // Urban sidewalk inner block bevel
-      ctx.beginPath();
-      ctx.moveTo(px, py - hh + 2.5);
-      ctx.lineTo(px + hw - 5, py);
-      ctx.lineTo(px, py + hh - 2.5);
-      ctx.lineTo(px - hw + 5, py);
-      ctx.closePath();
-      ctx.strokeStyle = 'rgba(203, 213, 225, 0.16)';
-      ctx.lineWidth = 0.7;
-      ctx.stroke();
-    } else {
-      // Lush textured meadow grass palette (Capitalism Lab-inspired multi-tone turf)
-      const grassShades = ['#254f2b', '#2b5930', '#2f6133', '#234a28', '#336535'];
-      ctx.fillStyle = grassShades[seed % grassShades.length];
-      ctx.fill();
-      ctx.strokeStyle = '#1d4023';
-      ctx.lineWidth = 0.65;
-      ctx.stroke();
-
-      // Pre-baked organic turf & meadow texture flecks (zero runtime overhead!)
-      ctx.fillStyle = seed % 3 === 0 ? 'rgba(134, 239, 172, 0.14)' : 'rgba(163, 230, 53, 0.12)';
-      const ox1 = ((seed >> 2) % 16) - 8;
-      const oy1 = ((seed >> 5) % 8) - 4;
-      const ox2 = ((seed >> 7) % 14) - 7;
-      const oy2 = ((seed >> 9) % 8) - 4;
-      ctx.fillRect(px + ox1, py + oy1, 2, 1.5);
-      ctx.fillRect(px + ox2, py + oy2, 1.8, 1.2);
-      ctx.fillStyle = 'rgba(20, 45, 24, 0.25)';
-      ctx.fillRect(px - ox1 * 0.5, py - oy1 * 0.5, 2, 1.2);
-    }
-
-    // Coastal seawall / sandy bank where land borders water
-    if (eastWater || southWater) {
-      ctx.strokeStyle = '#d6b47e';
-      ctx.lineWidth = 2.2;
-      ctx.beginPath();
-      if (eastWater) {
-        ctx.moveTo(px + hw, py);
-        ctx.lineTo(px, py + hh);
-      }
-      if (southWater) {
-        ctx.moveTo(px, py + hh);
-        ctx.lineTo(px - hw, py);
-      }
-      ctx.stroke();
-    }
-  }
-
-  private drawWaterTile(
-    ctx: CanvasRenderingContext2D,
-    px: number,
-    py: number,
-    fillStyle: string,
-    strokeStyle: string
-  ) {
-    const hw = this.tileWidth * 0.5;
-    const hh = this.tileHeight * 0.5;
-
-    ctx.beginPath();
-    ctx.moveTo(px, py - hh);
-    ctx.lineTo(px + hw, py);
-    ctx.lineTo(px, py + hh);
-    ctx.lineTo(px - hw, py);
-    ctx.closePath();
-
-    ctx.fillStyle = fillStyle;
-    ctx.fill();
-    ctx.strokeStyle = strokeStyle;
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
+    drawFlatTexturedGroundTile(
+      ctx,
+      px,
+      py,
+      this.tileWidth,
+      this.tileHeight,
+      this.gridSize,
+      parcel,
+      this.activeBiome,
+      eastWater,
+      southWater
+    );
   }
 
   private drawTrafficHeatTile(

@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { SimulationState, Facility, MapParcel } from '../types/game';
+import { SimulationState, Facility, MapParcel, CityBiome } from '../types/game';
 import { IsometricEngine } from '../engine/isometricEngine';
 import { getParcelAt } from '../engine/spatialGrid';
 import { formatSignedCurrency, formatCostShort } from '../engine/precisionMath';
 import {
+  CITY_BIOME_META,
   GOVT_OWNER_ID,
+  MAX_CITIES,
   RESIDENT_OWNER_ID,
   RESOURCE_DEPOSIT_META,
 } from '../engine/productsData';
@@ -31,6 +33,8 @@ import {
   Newspaper,
   ChevronDown,
   ChevronUp,
+  Globe,
+  X,
 } from 'lucide-react';
 import { FacilityIcon } from './IconHelper';
 
@@ -42,6 +46,8 @@ interface MapViewProps {
   onDemolishResident: (facilityId: string) => void;
   onBuyLand: (x: number, y: number) => void;
   onSellLand: (x: number, y: number) => void;
+  onSwitchCity: (cityId: string) => void;
+  onCreateCity: (name: string, biome: CityBiome) => boolean;
 }
 
 export function MapView({
@@ -52,6 +58,8 @@ export function MapView({
   onDemolishResident,
   onBuyLand,
   onSellLand,
+  onSwitchCity,
+  onCreateCity,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -69,8 +77,15 @@ export function MapView({
   const [showMacroDetails, setShowMacroDetails] = useState(true);
   const [mobileRadarOpen, setMobileRadarOpen] = useState(false);
   const [confirmDemolishRes, setConfirmDemolishRes] = useState(false);
+  const [showNewCityModal, setShowNewCityModal] = useState(false);
+  const [newCityName, setNewCityName] = useState('');
+  const [newCityBiome, setNewCityBiome] = useState<CityBiome>('agri_valley');
 
   const isMinimapDraggingRef = useRef(false);
+  const modalBackdropRef = useRef(false);
+
+  const activeCityId = state.activeCityId || 'city_metro_1';
+  const activeBiome: CityBiome = state.city.biome || 'coastal_metro';
 
   const renderOptsRef = useRef({
     showBadges: true,
@@ -78,6 +93,8 @@ export function MapView({
     showTrafficOverlay: false,
     showResourcesOverlay: false,
     showResidentFocus: false,
+    cityId: activeCityId,
+    cityBiome: activeBiome,
   });
   renderOptsRef.current = {
     showBadges,
@@ -85,11 +102,31 @@ export function MapView({
     showTrafficOverlay,
     showResourcesOverlay,
     showResidentFocus,
+    cityId: activeCityId,
+    cityBiome: activeBiome,
   };
 
   useEffect(() => {
     setConfirmDemolishRes(false);
   }, [selectedCoord?.x, selectedCoord?.y]);
+
+  useEffect(() => {
+    setSelectedCoord(null);
+    if (engineRef.current) {
+      engineRef.current.selectedTile = null;
+      const g = Math.round(Math.sqrt(state.mapParcels.length)) || 40;
+      engineRef.current.centerCameraOn(Math.floor(g / 2), Math.floor(g / 2), false);
+    }
+  }, [activeCityId]);
+
+  useEffect(() => {
+    if (!showNewCityModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowNewCityModal(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showNewCityModal]);
 
   useEffect(() => {
     if (!canvasRef.current || !containerRef.current) return;
@@ -110,7 +147,8 @@ export function MapView({
       if (w > 0 && h > 0) {
         engine.resize(w, h);
         if (!hasCentered) {
-          engine.centerCameraOn(16, 16, false);
+          const g = Math.round(Math.sqrt(stateRef.current.mapParcels.length)) || 40;
+          engine.centerCameraOn(Math.floor(g / 2), Math.floor(g / 2), false);
           hasCentered = true;
         }
       }
@@ -296,14 +334,18 @@ export function MapView({
   const handleCenterHQ = () => {
     if (!engineRef.current) return;
     const hq = Object.values(state.facilities).find(
-      f => f.companyId === state.playerCompanyId && f.type === 'corporate_hq'
+      f =>
+        f.companyId === state.playerCompanyId &&
+        f.type === 'corporate_hq' &&
+        (f.cityId || 'city_metro_1') === activeCityId
     );
     if (hq) {
       engineRef.current.centerCameraOn(hq.tileX, hq.tileY, true);
       engineRef.current.selectedTile = { x: hq.tileX, y: hq.tileY };
       setSelectedCoord({ x: hq.tileX, y: hq.tileY });
     } else {
-      engineRef.current.centerCameraOn(16, 16, true);
+      const g = Math.round(Math.sqrt(state.mapParcels.length)) || 40;
+      engineRef.current.centerCameraOn(Math.floor(g / 2), Math.floor(g / 2), true);
     }
   };
 
@@ -329,14 +371,22 @@ export function MapView({
         className="w-full h-full block cursor-grab active:cursor-grabbing"
       />
 
-      {/* City Telemetry Strip & Compact Map Layer Toggles (Top-Left) */}
-      <div className="absolute top-3 left-3 z-10 flex flex-col items-start gap-1.5">
-        <div className="pointer-events-none bg-[#0d1526]/95 border border-slate-800 rounded-xl px-3 py-2 text-[11px] shadow-lg">
-          <div className="flex items-center gap-1.5 font-bold text-slate-100">
-            <span>{state.city.name}</span>
-            <span aria-hidden="true" className="text-slate-600">·</span>
+      {/* City Telemetry Strip, Multi-City Switcher & Layer Toggles (Top-Left) */}
+      <div className="absolute top-3 left-3 right-[140px] md:right-auto z-10 flex flex-col items-start gap-1.5 pointer-events-none">
+        <div
+          onPointerDown={e => e.stopPropagation()}
+          className="pointer-events-auto bg-[#0d1526]/95 border border-slate-800 rounded-xl px-2.5 md:px-3 py-2 text-[11px] shadow-lg w-full md:w-auto md:max-w-[440px]"
+        >
+          <div className="flex items-center justify-between gap-2 font-bold text-slate-100">
+            <div className="flex items-center gap-1.5 truncate">
+              <Globe className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="truncate">{state.city.name}</span>
+              <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                ({(state.cityOrder || [activeCityId]).length}/{MAX_CITIES})
+              </span>
+            </div>
             <span
-              className={`text-[10px] font-semibold ${
+              className={`text-[10px] font-semibold shrink-0 ${
                 state.macro.cyclePhase === 'boom'
                   ? 'text-emerald-400'
                   : state.macro.cyclePhase === 'recession'
@@ -354,13 +404,54 @@ export function MapView({
             <span aria-hidden="true">·</span>
             <span>IKK {state.city.consumerConfidence}</span>
             <span aria-hidden="true">·</span>
-            <span>Hunian {state.city.residentHousesCount ?? 12} rmh</span>
+            <span>Warga {state.city.residentHousesCount ?? 12}</span>
+            {state.city.mayorName && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-sans text-teal-300 truncate max-w-[140px]">
+                  WK: {state.city.mayorName}
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Compact City Switcher + New City CTA */}
+          <div className="flex items-center gap-1 mt-1.5 pt-1.5 border-t border-slate-800/80 overflow-x-auto no-scrollbar">
+            {(state.cityOrder || [activeCityId]).map(cId => {
+              const cObj = state.cities?.[cId] || (cId === activeCityId ? state.city : null);
+              if (!cObj) return null;
+              const isAct = cId === activeCityId;
+              return (
+                <button
+                  key={cId}
+                  type="button"
+                  onClick={() => onSwitchCity(cId)}
+                  className={`min-h-[26px] px-2 rounded-md border text-[10px] font-semibold whitespace-nowrap transition-colors ${
+                    isAct
+                      ? 'bg-sky-600 border-sky-400 text-white'
+                      : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  {cObj.name}
+                </button>
+              );
+            })}
+            {(state.cityOrder || [activeCityId]).length < MAX_CITIES && (
+              <button
+                type="button"
+                onClick={() => setShowNewCityModal(true)}
+                className="min-h-[26px] px-2 rounded-md border border-emerald-600/60 bg-emerald-950/60 hover:bg-emerald-900/70 text-emerald-300 text-[10px] font-bold flex items-center gap-0.5 whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Kota</span>
+              </button>
+            )}
           </div>
         </div>
 
         <div
           onPointerDown={e => e.stopPropagation()}
-          className="flex flex-wrap items-center gap-1 max-w-[265px] sm:max-w-[440px]"
+          className="pointer-events-auto flex flex-wrap items-center gap-1 w-full md:w-auto md:max-w-[440px]"
         >
           <button
             type="button"
@@ -864,6 +955,124 @@ export function MapView({
                 <span className="truncate">{item.title}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      {/* Found New City Modal (up to 10 Cities) */}
+      {showNewCityModal && (
+        <div
+          onPointerDown={e => {
+            modalBackdropRef.current = e.target === e.currentTarget;
+          }}
+          onClick={e => {
+            if (modalBackdropRef.current && e.target === e.currentTarget) {
+              setShowNewCityModal(false);
+            }
+            modalBackdropRef.current = false;
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Dirikan Kota Baru"
+            onPointerDown={e => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-4 space-y-3.5 shadow-2xl text-xs"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-bold text-sm text-white">
+                  Dirikan Kota Baru ({(state.cityOrder || [activeCityId]).length}/{MAX_CITIES})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewCityModal(false)}
+                className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-lg bg-slate-800 text-slate-300 hover:text-white"
+                aria-label="Tutup Modal Kota"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="new-city-name" className="text-[11px] font-semibold text-slate-300 block">
+                Nama Kota (Opsional):
+              </label>
+              <input
+                id="new-city-name"
+                type="text"
+                value={newCityName}
+                onChange={e => setNewCityName(e.target.value)}
+                placeholder="Contoh: Delta Inovasi"
+                maxLength={28}
+                className="w-full min-h-[40px] px-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:outline-hidden focus:border-sky-500"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-semibold text-slate-300 block">
+                Pilih Bioma &amp; Karakteristik Lahan (40×40):
+              </span>
+              <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
+                {(Object.keys(CITY_BIOME_META) as CityBiome[]).map(bKey => {
+                  const meta = CITY_BIOME_META[bKey];
+                  const affordable = playerCash >= meta.foundCost;
+                  const active = newCityBiome === bKey;
+                  return (
+                    <button
+                      key={bKey}
+                      type="button"
+                      onClick={() => setNewCityBiome(bKey)}
+                      className={`w-full text-left p-2.5 rounded-xl border transition-colors ${
+                        active
+                          ? 'bg-sky-950/60 border-sky-500 text-white'
+                          : 'bg-[#0d1526] border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-xs">{meta.label}</span>
+                        <span
+                          className={`font-mono font-bold text-[11px] ${
+                            affordable ? 'text-emerald-400' : 'text-rose-400'
+                          }`}
+                        >
+                          ${meta.foundCost.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono tabular-nums">
+                        Populasi Awal {(meta.popBase / 1_000_000).toFixed(2)}M · Upah ${meta.wageBase.toLocaleString()}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowNewCityModal(false)}
+                className="flex-1 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={playerCash < CITY_BIOME_META[newCityBiome].foundCost}
+                onClick={() => {
+                  const ok = onCreateCity(newCityName, newCityBiome);
+                  if (ok) {
+                    setNewCityName('');
+                    setShowNewCityModal(false);
+                  }
+                }}
+                className="flex-1 min-h-[42px] rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold"
+              >
+                Resmikan Kota
+              </button>
+            </div>
           </div>
         </div>
       )}

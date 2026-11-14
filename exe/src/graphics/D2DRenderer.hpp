@@ -266,6 +266,7 @@ private:
     std::unordered_map<uint32_t, Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>> brushCache_;
     std::unordered_map<uint32_t, Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>> bakeBrushCache_;
     std::vector<D2D1_MATRIX_3X2_F> transformStack_;
+    int clipDepth_ = 0;
     std::wstring textScratch_;
     D2D1_MATRIX_3X2_F baseDpiMatrix_{};
 };

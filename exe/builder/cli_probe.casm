@@ -1,0 +1,72 @@
+; CapLab 13 Proprietary Native CLI Preflight Tool (cli_probe.casm)
+; Compiled independently by CapLab Custom PE64 Compiler -> WINDOWS_CUI x86-64 binary.
+; Demonstrates multi-target in-house compilation: ANSI/UTF-8 astr + Win32 Console I/O.
+
+.subsystem WINDOWS_CUI
+
+.manifest
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    version="13.0.0.0"
+    processorArchitecture="amd64"
+    name="CapLab13.CliPreflightProbe"
+    type="win32"
+  />
+  <description>CapLab 13 Native Low-Level Win32 CLI Probe</description>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <heapType xmlns="urn:schemas-microsoft-com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
+    </windowsSettings>
+  </application>
+</assembly>
+.end_manifest
+
+.imports
+KERNEL32.dll: GetStdHandle, WriteConsoleA, ExitProcess
+
+.rdata
+msg_ready astr "[CAPLAB-PE64] Native Win11 x64 CUI runtime OK\r\n"
+
+.data
+bytesWritten resb 16
+
+.text
+; int strlen_a(rcx=ptr) -> r8d = length
+strlen_a:
+    xor r8d, r8d
+len_loop:
+    mov al, [rcx]
+    test al, al
+    jz len_done
+    inc r8
+    inc rcx
+    jmp len_loop
+len_done:
+    ret
+
+_start:
+    sub rsp, 0x38
+    mov ecx, -11
+    call [rip + GetStdHandle]
+    mov rbx, rax
+    cmp rbx, -1
+    je exit_fail
+
+    lea rcx, [rip + msg_ready]
+    call strlen_a
+
+    mov rcx, rbx
+    lea rdx, [rip + msg_ready]
+    lea r9, [rip + bytesWritten]
+    mov qword [rsp + 0x20], 0
+    call [rip + WriteConsoleA]
+
+    xor ecx, ecx
+    call [rip + ExitProcess]
+
+exit_fail:
+    mov ecx, 1
+    call [rip + ExitProcess]

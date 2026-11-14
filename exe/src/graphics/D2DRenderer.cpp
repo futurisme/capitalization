@@ -33,6 +33,7 @@ bool D2DRenderer::initialize(HWND hwnd, int pixelWidth, int pixelHeight, float d
     logicalHeight_ = static_cast<float>(pixelHeight_) / dpiScale_;
     brushCache_.reserve(128);
     bakeBrushCache_.reserve(64);
+    transformStack_.reserve(16);
     textScratch_.reserve(256);
 
     if (!create_device_resources()) {
@@ -319,7 +320,7 @@ bool D2DRenderer::create_text_formats() {
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             sp.size,
-            L"id-ID",
+            L"",
             textFormats_[idx].GetAddressOf());
         if (FAILED(hr)) return false;
         dwriteFactory_->CreateEllipsisTrimmingSign(
@@ -408,6 +409,7 @@ ID2D1SolidColorBrush* D2DRenderer::get_brush(uint32_t argb) {
 void D2DRenderer::begin_frame(uint32_t clearColorArgb) {
     if (!d2dContext_) return;
     transformStack_.clear();
+    clipDepth_ = 0;
     d2dContext_->BeginDraw();
     d2dContext_->SetTransform(D2D1::Matrix3x2F::Identity());
     d2dContext_->Clear(argb_to_d2d(clearColorArgb));
@@ -416,6 +418,10 @@ void D2DRenderer::begin_frame(uint32_t clearColorArgb) {
 
 bool D2DRenderer::end_frame(bool allowTearingPresent) {
     if (!d2dContext_ || !inFrame_) return true;
+    while (clipDepth_ > 0) {
+        d2dContext_->PopAxisAlignedClip();
+        --clipDepth_;
+    }
     inFrame_ = false;
     HRESULT hr = d2dContext_->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
@@ -444,12 +450,15 @@ void D2DRenderer::push_clip(const RectF& rect) {
         rt->PushAxisAlignedClip(
             D2D1::RectF(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h),
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        ++clipDepth_;
     }
 }
 
 void D2DRenderer::pop_clip() {
+    if (clipDepth_ <= 0) return;
     if (auto* rt = active_rt()) {
         rt->PopAxisAlignedClip();
+        --clipDepth_;
     }
 }
 
@@ -547,10 +556,34 @@ void D2DRenderer::draw_dashed_line(float x1, float y1, float x2, float y2, uint3
     rt->DrawLine(D2D1::Point2F(x1, y1), D2D1::Point2F(x2, y2), br, strokeWidth, dashedStroke_.Get());
 }
 
+namespace {
+inline bool try_as_axis_aligned_rect(const Point2F* pts, size_t count, D2D1_RECT_F& outRect) noexcept {
+    if (count != 4) return false;
+    constexpr float eps = 0.01f;
+    const bool h01 = std::abs(pts[0].y - pts[1].y) < eps && std::abs(pts[2].y - pts[3].y) < eps &&
+                     std::abs(pts[1].x - pts[2].x) < eps && std::abs(pts[3].x - pts[0].x) < eps;
+    const bool v01 = std::abs(pts[0].x - pts[1].x) < eps && std::abs(pts[2].x - pts[3].x) < eps &&
+                     std::abs(pts[1].y - pts[2].y) < eps && std::abs(pts[3].y - pts[0].y) < eps;
+    if (!h01 && !v01) return false;
+    float minX = std::min({pts[0].x, pts[1].x, pts[2].x, pts[3].x});
+    float maxX = std::max({pts[0].x, pts[1].x, pts[2].x, pts[3].x});
+    float minY = std::min({pts[0].y, pts[1].y, pts[2].y, pts[3].y});
+    float maxY = std::max({pts[0].y, pts[1].y, pts[2].y, pts[3].y});
+    outRect = D2D1::RectF(minX, minY, maxX, maxY);
+    return true;
+}
+} // namespace
+
 void D2DRenderer::fill_polygon(const Point2F* pts, size_t count, uint32_t argb) {
     auto* rt = active_rt();
     auto* br = get_brush(argb);
     if (!rt || !br || !d2dFactory_ || count < 3) return;
+
+    D2D1_RECT_F fastRect{};
+    if (try_as_axis_aligned_rect(pts, count, fastRect)) {
+        rt->FillRectangle(fastRect, br);
+        return;
+    }
 
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> geo;
     if (FAILED(d2dFactory_->CreatePathGeometry(geo.GetAddressOf()))) return;
@@ -570,6 +603,12 @@ void D2DRenderer::stroke_polygon(const Point2F* pts, size_t count, uint32_t argb
     auto* rt = active_rt();
     auto* br = get_brush(argb);
     if (!rt || !br || !d2dFactory_ || count < 2) return;
+
+    D2D1_RECT_F fastRect{};
+    if (try_as_axis_aligned_rect(pts, count, fastRect)) {
+        rt->DrawRectangle(fastRect, br, strokeWidth);
+        return;
+    }
 
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> geo;
     if (FAILED(d2dFactory_->CreatePathGeometry(geo.GetAddressOf()))) return;

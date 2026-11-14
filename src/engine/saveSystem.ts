@@ -25,9 +25,16 @@ import {
   createResidentHouseFacility,
   computeHousingSummary,
 } from './housingEcosystem';
+import {
+  buildInitialProductStats,
+  createInitialGovernment,
+  generateBiomeCityParcels,
+  PRIMARY_CITY_ID,
+} from './governmentEngine';
+import { ensureAiEntitiesPopulated, generateInitialAiEntities } from './investorEngine';
 
-export const MAP_GRID_SIZE = 32;
-const SAVE_KEY_PREFIX = 'caplab_mobile_save_v2';
+export const MAP_GRID_SIZE = 40;
+const SAVE_KEY_PREFIX = 'caplab_mobile_save_v3';
 const AUTO_SAVE_KEY = `${SAVE_KEY_PREFIX}_auto`;
 
 function createDefaultExecutives(isHiredFirst = false) {
@@ -46,21 +53,29 @@ export function buildBaseTechMap(
     crude_oil: 30,
     iron_ore: 30,
     silicon: 30,
+    timber: 30,
+    coffee_bean: 30,
     flour: 35,
     steel: 35,
     plastic: 35,
     electronic_chip: 40,
     fabric: 35,
     battery_cell: 38,
+    lumber: 35,
+    solar_panel: 38,
     bread: 40,
     soft_drink: 40,
+    roasted_coffee: 40,
     fashion_apparel: 40,
+    furniture: 38,
     medicine: 42,
     smartphone: 45,
     laptop: 45,
     automobile: 35,
+    ev_suv: 35,
     software_os: 40,
     ai_enterprise: 35,
+    fintech_app: 38,
     ...override,
   };
 }
@@ -207,6 +222,8 @@ export function createCompanyAndStarterFromTemplate(
     color: template.color,
     accentColor: template.accentColor,
     isPlayer: false,
+    isPublic: true,
+    ipoMonth: currentTick,
     ceoName: template.ceoName,
     ceoAvatar: template.id,
     ceoIcon: template.id,
@@ -262,74 +279,19 @@ export function createCompanyAndStarterFromTemplate(
     marketSharePercentage: 8,
   };
 
+  if (starterFacility) {
+    starterFacility.cityId = PRIMARY_CITY_ID;
+  }
+
   return { company, facility: starterFacility, updatedParcels };
 }
 
 /**
- * Generates an expanded 32x32 (1,024-tile) metropolitan zoning layout with
- * 4x4 arterial highways, heavy industrial district, central CBD, residential suburbs, and river harbor.
+ * Generates an expanded 40x40 (1,600-tile) biome-aware metropolitan zoning layout with
+ * 8x8 arterial highways, heavy industrial district, central CBD, residential suburbs, and river harbor.
  */
 export function generateCityParcels(gridSize = MAP_GRID_SIZE): MapParcel[] {
-  const parcels: MapParcel[] = new Array(gridSize * gridSize);
-  let idx = 0;
-
-  for (let y = 0; y < gridSize; y++) {
-    for (let x = 0; x < gridSize; x++) {
-      let terrain: MapParcel['terrainType'] = 'grass';
-      let isAllowed = true;
-      let districtName = 'Kawasan Hunian Suburban';
-
-      if (x + y >= gridSize * 2 - 7) {
-        terrain = 'water';
-        isAllowed = false;
-        districtName = 'Pelabuhan Sungai';
-      } else if (
-        x === 5 ||
-        y === 5 ||
-        x === 13 ||
-        y === 13 ||
-        x === 21 ||
-        y === 21 ||
-        x === 27 ||
-        y === 27
-      ) {
-        terrain = 'road';
-        isAllowed = false;
-        districtName = 'Jalan Arteri Utama';
-      } else if (x <= 12 && y <= 12) {
-        terrain = 'industrial_zone';
-        districtName = 'Zona Industri Berat';
-      } else if (x >= 6 && x <= 25 && y >= 6 && y <= 25) {
-        terrain = 'pavement';
-        districtName = 'Pusat Bisnis CBD';
-      }
-
-      const baseTraffic =
-        terrain === 'water'
-          ? 0
-          : terrain === 'road'
-          ? 34
-          : terrain === 'pavement'
-          ? 24
-          : terrain === 'industrial_zone'
-          ? 12
-          : 14;
-
-      parcels[idx++] = {
-        x,
-        y,
-        terrainType: terrain,
-        isZoneAllowed: isAllowed,
-        trafficIndex: baseTraffic,
-        districtName,
-        landValue:
-          terrain === 'pavement' ? 245000 : terrain === 'industrial_zone' ? 120000 : 88000,
-        landStatus: isAllowed ? 'for_sale' : 'public',
-      };
-    }
-  }
-
-  return seedResourceDepositsOnParcels(parcels);
+  return generateBiomeCityParcels(gridSize, 'coastal_metro', 0);
 }
 
 const CIVIC_HOUSING_COORDS: { x: number; y: number; name: string }[] = [
@@ -379,6 +341,8 @@ export function generateDefaultState(): SimulationState {
       color: '#0284c7',
       accentColor: '#38bdf8',
       isPlayer: true,
+      isPublic: true,
+      ipoMonth: 0,
       ceoName: 'Konglomerat Anda',
       ceoAvatar: 'comp_player',
       ceoIcon: 'comp_player',
@@ -423,6 +387,7 @@ export function generateDefaultState(): SimulationState {
     fac_player_hq: {
       id: 'fac_player_hq',
       companyId: 'comp_player',
+      cityId: PRIMARY_CITY_ID,
       name: 'Menara Kantor Pusat NUSA',
       type: 'corporate_hq',
       tileX: 16,
@@ -447,6 +412,7 @@ export function generateDefaultState(): SimulationState {
     fac_player_store: {
       id: 'fac_player_store',
       companyId: 'comp_player',
+      cityId: PRIMARY_CITY_ID,
       name: 'Nusantara Mart Utama',
       type: 'store_convenience',
       tileX: 17,
@@ -477,6 +443,7 @@ export function generateDefaultState(): SimulationState {
     facilities[facId] = {
       id: facId,
       companyId: GOVT_OWNER_ID,
+      cityId: PRIMARY_CITY_ID,
       name: c.name,
       type: 'civic_housing',
       tileX: c.x,
@@ -504,6 +471,7 @@ export function generateDefaultState(): SimulationState {
   // Seed initial citizen-owned Resident Houses across suburban/urban neighborhoods
   INITIAL_RESIDENT_HOUSE_COORDS.forEach((rc, idx) => {
     const house = createResidentHouseFacility(rc.x, rc.y, rc.tier, 0, idx + 1);
+    house.cityId = PRIMARY_CITY_ID;
     facilities[house.id] = house;
   });
 
@@ -522,7 +490,7 @@ export function generateDefaultState(): SimulationState {
   });
 
   // Compute initial city crowd traffic so AI spawns smartly appreciate foot traffic
-  parcels = recalculateCityTraffic(parcels, facilities);
+  parcels = recalculateCityTraffic(parcels, facilities, 1.0, PRIMARY_CITY_ID);
 
   // Populate 9 distinct AI competitors to reach MAX_ACTIVE_COMPANIES (10 total active firms)
   for (const template of INITIAL_AI_ROSTER.slice(0, MAX_ACTIVE_COMPANIES - 1)) {
@@ -531,47 +499,73 @@ export function generateDefaultState(): SimulationState {
     });
     companies[spawned.company.id] = spawned.company;
     if (spawned.facility) {
+      spawned.facility.cityId = PRIMARY_CITY_ID;
       facilities[spawned.facility.id] = spawned.facility;
     }
     parcels = spawned.updatedParcels;
   }
 
-  parcels = recalculateCityTraffic(parcels, facilities);
+  parcels = recalculateCityTraffic(parcels, facilities, 1.0, PRIMARY_CITY_ID);
   const housingSummary = computeHousingSummary(2150000, facilities);
 
+  const { aiEntities, aiEntityOrder } = generateInitialAiEntities(companies);
+
+  // Link initial AI CEOs to their companies and pick initial Mayor & National Cabinet
+  const mayorEnt = Object.values(aiEntities)
+    .filter(e => e.role === 'investor')
+    .sort((a, b) => b.politicalClout - a.politicalClout)[2];
+
+  if (mayorEnt) {
+    aiEntities[mayorEnt.id] = {
+      ...mayorEnt,
+      role: 'mayor',
+      governedCityId: PRIMARY_CITY_ID,
+      careerHistory: ['Menjabat Wali Kota Metropolis Raya.', ...mayorEnt.careerHistory].slice(0, 8),
+    };
+  }
+
+  for (const ent of Object.values(aiEntities)) {
+    if (ent.role === 'ceo' && ent.companyId && companies[ent.companyId]) {
+      companies[ent.companyId] = {
+        ...companies[ent.companyId],
+        ceoEntityId: ent.id,
+      };
+    }
+  }
+
+  const baseProductStats = buildInitialProductStats();
+  baseProductStats.bread = {
+    monthlyDemand: 75000,
+    monthlySupply: 62000,
+    averageMarketPrice: 8.5,
+    playerMarketShare: 45,
+    satisfactionRate: 82,
+    seaportImportShare: 100,
+  };
+
   const city: CityMarket = {
+    id: PRIMARY_CITY_ID,
     name: 'Metropolis Raya',
+    biome: 'coastal_metro',
     population: 2150000,
     growthRate: 0.003,
     averageWage: 4800,
     consumerConfidence: 82,
     housingSupply: housingSummary.housingSupply,
     residentHousesCount: housingSummary.residentHousesCount,
-    productStats: {
-      wheat: { monthlyDemand: 22000, monthlySupply: 18000, averageMarketPrice: 120, playerMarketShare: 0, satisfactionRate: 81, seaportImportShare: 100 },
-      livestock: { monthlyDemand: 12000, monthlySupply: 10500, averageMarketPrice: 310, playerMarketShare: 0, satisfactionRate: 87, seaportImportShare: 100 },
-      crude_oil: { monthlyDemand: 15000, monthlySupply: 14000, averageMarketPrice: 75, playerMarketShare: 0, satisfactionRate: 93, seaportImportShare: 100 },
-      iron_ore: { monthlyDemand: 18000, monthlySupply: 16500, averageMarketPrice: 100, playerMarketShare: 0, satisfactionRate: 91, seaportImportShare: 50 },
-      silicon: { monthlyDemand: 9000, monthlySupply: 7200, averageMarketPrice: 190, playerMarketShare: 0, satisfactionRate: 80, seaportImportShare: 100 },
-      flour: { monthlyDemand: 16000, monthlySupply: 14000, averageMarketPrice: 210, playerMarketShare: 0, satisfactionRate: 87, seaportImportShare: 100 },
-      steel: { monthlyDemand: 14000, monthlySupply: 12500, averageMarketPrice: 340, playerMarketShare: 0, satisfactionRate: 89, seaportImportShare: 100 },
-      plastic: { monthlyDemand: 13000, monthlySupply: 12000, averageMarketPrice: 175, playerMarketShare: 0, satisfactionRate: 92, seaportImportShare: 100 },
-      electronic_chip: { monthlyDemand: 8000, monthlySupply: 6500, averageMarketPrice: 580, playerMarketShare: 0, satisfactionRate: 81, seaportImportShare: 100 },
-      fabric: { monthlyDemand: 15000, monthlySupply: 13500, averageMarketPrice: 145, playerMarketShare: 0, satisfactionRate: 90, seaportImportShare: 100 },
-      battery_cell: { monthlyDemand: 9500, monthlySupply: 6200, averageMarketPrice: 315, playerMarketShare: 0, satisfactionRate: 65, seaportImportShare: 100 },
-      bread: { monthlyDemand: 75000, monthlySupply: 62000, averageMarketPrice: 8.5, playerMarketShare: 45, satisfactionRate: 82, seaportImportShare: 100 },
-      soft_drink: { monthlyDemand: 65000, monthlySupply: 48000, averageMarketPrice: 14.0, playerMarketShare: 0, satisfactionRate: 73, seaportImportShare: 100 },
-      fashion_apparel: { monthlyDemand: 28000, monthlySupply: 22000, averageMarketPrice: 65.0, playerMarketShare: 0, satisfactionRate: 78, seaportImportShare: 100 },
-      medicine: { monthlyDemand: 32000, monthlySupply: 19500, averageMarketPrice: 36.0, playerMarketShare: 0, satisfactionRate: 61, seaportImportShare: 100 },
-      smartphone: { monthlyDemand: 18000, monthlySupply: 13000, averageMarketPrice: 650.0, playerMarketShare: 0, satisfactionRate: 72, seaportImportShare: 100 },
-      laptop: { monthlyDemand: 9500, monthlySupply: 6800, averageMarketPrice: 1150.0, playerMarketShare: 0, satisfactionRate: 71, seaportImportShare: 100 },
-      automobile: { monthlyDemand: 1200, monthlySupply: 850, averageMarketPrice: 28500.0, playerMarketShare: 0, satisfactionRate: 70, seaportImportShare: 100 },
-      software_os: { monthlyDemand: 14000, monthlySupply: 4500, averageMarketPrice: 120.0, playerMarketShare: 0, satisfactionRate: 32, seaportImportShare: 100 },
-      ai_enterprise: { monthlyDemand: 4800, monthlySupply: 1200, averageMarketPrice: 380.0, playerMarketShare: 0, satisfactionRate: 25, seaportImportShare: 100 },
-    },
+    gridSize: MAP_GRID_SIZE,
+    mapParcels: parcels,
+    mayorEntityId: mayorEnt?.id,
+    mayorName: mayorEnt?.name || 'Hadi Wibowo',
+    cityTaxRate: 0.08,
+    publicHousingBudget: 350000,
+    landGrantDiscount: 0.1,
+    approvalRating: 75,
+    foundedMonth: 0,
+    productStats: baseProductStats,
   };
 
-  return {
+  const baseState: SimulationState = {
     currentTick: 0,
     isPaused: false,
     simSpeed: 1,
@@ -580,6 +574,9 @@ export function generateDefaultState(): SimulationState {
     companies,
     facilities,
     city,
+    cities: { [PRIMARY_CITY_ID]: city },
+    cityOrder: [PRIMARY_CITY_ID],
+    activeCityId: PRIMARY_CITY_ID,
     macro: {
       cyclePhase: 'normal',
       gdpGrowthRate: 2.9,
@@ -593,25 +590,38 @@ export function generateDefaultState(): SimulationState {
     },
     mapParcels: parcels,
     stockTransactions: [],
+    aiEntities,
+    aiEntityOrder,
     newsFeed: [
       {
         id: 'news_init_1',
         month: 0,
         category: 'economy',
-        title: 'Metropolis Raya Diperluas: Peta 32x32, Deposit & Permukiman Warga',
+        title: 'Metropolis Raya Diperluas: Peta 40x40, 28 Produk & Multi-Kota',
         detail:
-          'Bursa Metropolis Raya beroperasi dengan 10 korporasi lintas sektor, deposit sumber daya alam strategis, 8 Rusunawa Pemkot, dan sistem hunian warga otomatis.',
+          'Bursa beroperasi dengan 10 korporasi, 100 entitas investor AI, sistem kabinet pemerintah, dukungan hingga 10 kota, serta kontrol anak usaha & IPO.',
       },
       {
         id: 'news_init_2',
         month: 0,
         category: 'competitor',
-        title: 'Persaingan Spesialisasi 9 Konglomerat AI',
+        title: 'Ekosistem 100 Entitas AI Aktif: 9 CEO & 91 Investor Mandiri',
         detail:
-          'Masing-masing kompetitor AI memfokuskan modal nyata pada sektor unggulannya—termasuk Sinar Properti (LAND), BioMedika (MEDX), NovaTech (NOVA), dan OmniSupply (OMNI).',
+          '91 Investor independen memantau saham, dapat direkrut ke C-Suite, mengambil alih CEO mayoritas, hingga terpilih menjadi Wali Kota, Menaker & Presiden.',
       },
     ],
   };
+
+  const gov = createInitialGovernment(baseState);
+  if (gov.presidentEntityId && baseState.aiEntities?.[gov.presidentEntityId]) {
+    baseState.aiEntities[gov.presidentEntityId].role = 'president';
+  }
+  if (gov.ministerOfLaborEntityId && baseState.aiEntities?.[gov.ministerOfLaborEntityId]) {
+    baseState.aiEntities[gov.ministerOfLaborEntityId].role = 'minister_of_labor';
+  }
+  baseState.government = gov;
+
+  return baseState;
 }
 
 /**
@@ -759,10 +769,46 @@ export function hydrateState(rawParsed: unknown): SimulationState | null {
     : seedResourceDepositsOnParcels(rawParcels);
 
   const parcels = recalculateCityTraffic(parcelsWithDeposits, hydratedFacilities);
-  const hydratedCityPop = finiteOr(parsed.city?.population, fresh.city.population);
+  const hydratedCityPop = finiteOr(parsed.city?.population ?? fresh.city.population, fresh.city.population);
   const housingSummary = computeHousingSummary(hydratedCityPop, hydratedFacilities);
+  const activeId = parsed.activeCityId || PRIMARY_CITY_ID;
 
-  return {
+  const syncedCity: CityMarket = {
+    ...fresh.city,
+    ...(parsed.city || {}),
+    id: parsed.city?.id || activeId,
+    gridSize: MAP_GRID_SIZE,
+    mapParcels: parcels,
+    housingSupply: housingSummary.housingSupply,
+    residentHousesCount: housingSummary.residentHousesCount,
+    productStats: {
+      ...fresh.city.productStats,
+      ...((parsed.city && parsed.city.productStats) || {}),
+    },
+  };
+
+  const hydratedCities: Record<string, CityMarket> = {};
+  if (parsed.cities && typeof parsed.cities === 'object') {
+    for (const [cId, cObj] of Object.entries(parsed.cities)) {
+      if (!cObj || typeof cObj !== 'object') continue;
+      hydratedCities[cId] = {
+        ...syncedCity,
+        ...cObj,
+        id: cId,
+        productStats: {
+          ...fresh.city.productStats,
+          ...(cObj.productStats || {}),
+        },
+      };
+    }
+  }
+  hydratedCities[activeId] = syncedCity;
+  const cityOrder =
+    Array.isArray(parsed.cityOrder) && parsed.cityOrder.length > 0
+      ? parsed.cityOrder.filter(id => Boolean(hydratedCities[id]))
+      : Object.keys(hydratedCities);
+
+  const preliminary: SimulationState = {
     ...fresh,
     ...parsed,
     currentTick: Math.max(0, Math.floor(finiteOr(parsed.currentTick ?? 0, 0))),
@@ -772,21 +818,18 @@ export function hydrateState(rawParsed: unknown): SimulationState | null {
     macro: {
       ...fresh.macro,
       ...(parsed.macro || {}),
-      consumerPriceIndex: finiteOr(parsed.macro?.consumerPriceIndex, fresh.macro.consumerPriceIndex || 100),
-      unemploymentRate: finiteOr(parsed.macro?.unemploymentRate, fresh.macro.unemploymentRate || 5.15),
-      realWageRate: finiteOr(parsed.macro?.realWageRate, fresh.macro.realWageRate || 40.8),
+      consumerPriceIndex: finiteOr(parsed.macro?.consumerPriceIndex ?? (fresh.macro.consumerPriceIndex || 100), fresh.macro.consumerPriceIndex || 100),
+      unemploymentRate: finiteOr(parsed.macro?.unemploymentRate ?? (fresh.macro.unemploymentRate || 5.15), fresh.macro.unemploymentRate || 5.15),
+      realWageRate: finiteOr(parsed.macro?.realWageRate ?? (fresh.macro.realWageRate || 40.8), fresh.macro.realWageRate || 40.8),
     },
-    city: {
-      ...fresh.city,
-      ...(parsed.city || {}),
-      housingSupply: housingSummary.housingSupply,
-      residentHousesCount: housingSummary.residentHousesCount,
-      productStats: {
-        ...fresh.city.productStats,
-        ...((parsed.city && parsed.city.productStats) || {}),
-      },
-    },
+    city: syncedCity,
+    cities: hydratedCities,
+    cityOrder,
+    activeCityId: activeId,
+    government: parsed.government || fresh.government,
   };
+
+  return ensureAiEntitiesPopulated(preliminary);
 }
 
 export function saveGameStateToStorage(state: SimulationState, slotKey = AUTO_SAVE_KEY): boolean {
@@ -818,7 +861,7 @@ export function exportStateAsJSON(state: SimulationState): string {
 
 export function importStateFromJSON(jsonString: string): SimulationState | null {
   try {
-    if (jsonString.length > 2_000_000) return null;
+    if (jsonString.length > 8_000_000) return null;
     const parsed = JSON.parse(jsonString);
     return hydrateState(parsed);
   } catch (e) {

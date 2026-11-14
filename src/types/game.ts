@@ -1,5 +1,5 @@
 /**
- * Core type definitions for Capitalism Lab 13 Mobile Simulation Engine
+ * Core type definitions for Capitalism Lab 13 Simulation Engine
  */
 
 export type ProductId =
@@ -8,28 +8,36 @@ export type ProductId =
   | 'crude_oil'
   | 'iron_ore'
   | 'silicon'
+  | 'timber'
+  | 'coffee_bean'
   | 'flour'
   | 'steel'
   | 'plastic'
   | 'electronic_chip'
   | 'fabric'
   | 'battery_cell'
+  | 'lumber'
+  | 'solar_panel'
   | 'bread'
   | 'soft_drink'
+  | 'roasted_coffee'
   | 'fashion_apparel'
+  | 'furniture'
   | 'medicine'
   | 'smartphone'
   | 'laptop'
   | 'automobile'
+  | 'ev_suv'
   | 'software_os'
-  | 'ai_enterprise';
+  | 'ai_enterprise'
+  | 'fintech_app';
 
 export type ProductCategory = 'raw' | 'intermediate' | 'consumer' | 'digital';
 
 export interface ProductAppealWeights {
-  price: number;   // 0.0 - 1.0 (e.g. 0.55 for bread)
-  quality: number; // 0.0 - 1.0 (e.g. 0.50 for smartphone)
-  brand: number;   // 0.0 - 1.0 (e.g. 0.50 for fashion)
+  price: number;   // 0.0 - 1.0
+  quality: number; // 0.0 - 1.0
+  brand: number;   // 0.0 - 1.0
 }
 
 export interface ProductRecipe {
@@ -40,7 +48,7 @@ export interface ProductRecipe {
   icon: string;
   baseCost: number;
   basePrice: number;
-  seaportPrice: number; // Global seaport import baseline
+  seaportPrice: number;
   elasticity: number;
   demandFactor: number;
   appealWeights: ProductAppealWeights;
@@ -86,7 +94,7 @@ export type UnitType = 'purchasing' | 'manufacturing' | 'sales' | 'advertising' 
 
 export interface InternalUnit {
   id: string;
-  slotIndex: number; // 0 to 8 inside the iconic 3x3 layout matrix
+  slotIndex: number; // 0 to 8 inside 3x3 layout matrix
   type: UnitType;
   name: string;
   targetProductId?: ProductId;
@@ -102,6 +110,7 @@ export interface InternalUnit {
 export interface Facility {
   id: string;
   companyId: string;
+  cityId?: string; // City where facility is located (defaults to primary city)
   name: string;
   type: FacilityType;
   tileX: number;
@@ -109,16 +118,13 @@ export interface Facility {
   level: number;
   createdMonth: number;
 
-  // Operational units (Capitalism Lab 3x3 unit matrix)
   units: InternalUnit[];
 
-  // Commercial settings
   sellingPrice: number;
   adBudget: number;
   monthlyMaintenance: number;
-  autoPricing?: boolean; // Managed by COO or user
+  autoPricing?: boolean;
 
-  // Monthly metrics
   monthlyProduction: number;
   monthlySales: number;
   monthlyRevenue: number;
@@ -127,12 +133,12 @@ export interface Facility {
   lastMonthUnitsSold: number;
   inventoryLevel: number;
   inventoryCapacity: number;
-  qualityRating: number; // 0 to 100
-  brandRating: number; // 0 to 100
-  supplySourceLabel?: string; // 'Internal' | 'Seaport' | 'B2B'
-  housingTier?: 1 | 2 | 3; // For resident_house structures (1=Cottage, 2=Townhouse, 3=Residence)
-  residentFamilies?: number; // Number of resident households in residential structure
-  depositBonusPct?: number; // Extraction bonus when built on matching natural resource deposit
+  qualityRating: number;
+  brandRating: number;
+  supplySourceLabel?: string;
+  housingTier?: 1 | 2 | 3;
+  residentFamilies?: number;
+  depositBonusPct?: number;
 }
 
 export type ExecutiveRole = 'COO' | 'CTO' | 'CMO' | 'CFO';
@@ -145,9 +151,18 @@ export interface ExecutiveOfficer {
   skillRating: number; // 65 to 98
   monthlySalary: number;
   hired: boolean;
+  sourceEntityId?: string; // Linked AI Investor entity id if recruited from 100-entity pool
 }
 
 export type BrandStrategy = 'generic' | 'range' | 'corporate';
+
+export interface SubsidiaryDirective {
+  dividendPayoutRatio: number; // 0.0 to 0.90
+  rdFocusRatio: number; // 0.0 to 0.30
+  expansionMode: 'aggressive' | 'balanced' | 'cash_cow';
+  priceStrategy: 'discount' | 'market' | 'premium';
+  allowSupplySync: boolean;
+}
 
 export interface Company {
   id: string;
@@ -159,6 +174,7 @@ export interface Company {
   ceoName: string;
   ceoAvatar: string;
   ceoIcon?: string;
+  ceoEntityId?: string;
   lastConstructedTick?: number;
   personality?:
     | 'expansionist'
@@ -172,30 +188,29 @@ export interface Company {
   brandStrategy: BrandStrategy;
   corporateBrandRating: number;
 
-  // Executive C-Suite Team
+  // Subsidiary & IPO / Board Ownership
+  parentCompanyId?: string | null;
+  isPublic?: boolean;
+  ipoMonth?: number;
+  subsidiaryDirective?: SubsidiaryDirective;
+
   executives: ExecutiveOfficer[];
 
-  // Financial accounts
   cash: number;
   debt: number;
   bondDebt: number;
   monthlyInterestRate: number;
 
-  // Stock Information
   sharesOutstanding: number;
   treasuryShares: number;
   stockPrice: number;
   sharePriceHistory: number[];
   dividendPerShare: number;
 
-  // Shareholding portfolio: companyId -> shares owned
   shareholdings: Record<string, number>;
-
-  // R&D Tech Levels (ProductId -> Tech Level 1 to 100)
   techLevels: Record<ProductId, number>;
   activeResearchProduct?: ProductId;
 
-  // Historical Records (last 12 months)
   history: {
     months: string[];
     revenue: number[];
@@ -204,7 +219,6 @@ export interface Company {
     marketCap: number[];
   };
 
-  // Aggregated current stats
   facilitiesCount: number;
   totalAssets: number;
   bookValue: number;
@@ -215,28 +229,100 @@ export interface Company {
   marketSharePercentage: number;
 }
 
+export type AiEntityRole =
+  | 'investor'
+  | 'ceo'
+  | 'c_suite'
+  | 'mayor'
+  | 'minister_of_labor'
+  | 'president';
+
+export interface AiPersonEntity {
+  id: string;
+  name: string;
+  initials: string;
+  color: string;
+  role: AiEntityRole;
+  specialty: 'finance' | 'operations' | 'technology' | 'marketing' | 'governance';
+  ambition: 'empire_builder' | 'activist_investor' | 'public_servant' | 'tech_visionary';
+  cash: number;
+  portfolio: Record<string, number>; // companyId -> shares owned
+  netWorth: number;
+  financeSkill: number;
+  opsSkill: number;
+  rdSkill: number;
+  marketingSkill: number;
+  politicalClout: number;
+  companyId?: string;
+  executiveRole?: ExecutiveRole;
+  governedCityId?: string;
+  lastActionMonth: number;
+  careerHistory: string[];
+}
+
+export interface GovernmentPolicyLog {
+  id: string;
+  month: number;
+  actorName: string;
+  roleTitle: string;
+  summary: string;
+}
+
+export interface GovernmentState {
+  presidentEntityId?: string;
+  presidentName: string;
+  ministerOfLaborEntityId?: string;
+  ministerOfLaborName: string;
+  corporateTaxRate: number; // e.g., 0.15
+  dividendTaxRate: number; // e.g., 0.10
+  minimumWageFloor: number; // e.g., 3200
+  rdSubsidyRate: number; // e.g., 0.15
+  laborUnionStrength: number; // 10 - 90
+  nationalApproval: number; // 20 - 95
+  nextElectionTick: number;
+  policyLog: GovernmentPolicyLog[];
+}
+
 export type EconomicCyclePhase = 'boom' | 'normal' | 'recession' | 'recovery';
 
 export interface MacroEconomy {
   cyclePhase: EconomicCyclePhase;
-  gdpGrowthRate: number;      // e.g., +3.8% or -1.4%
-  inflationRate: number;      // e.g., 2.4%
-  centralBankRate: number;    // Annual % rate (e.g., 4.5%)
-  importTariffRate: number;   // % added to seaport prices
+  gdpGrowthRate: number;
+  inflationRate: number;
+  centralBankRate: number;
+  importTariffRate: number;
   monthsInPhase: number;
-  consumerPriceIndex?: number; // Cumulative CPI (base 100.0 at start)
-  unemploymentRate?: number;   // City unemployment % (e.g., 5.2%)
-  realWageRate?: number;       // Real wage index adjusted for CPI
+  consumerPriceIndex?: number;
+  unemploymentRate?: number;
+  realWageRate?: number;
 }
 
+export type CityBiome =
+  | 'coastal_metro'
+  | 'industrial_heartland'
+  | 'highland_mining'
+  | 'agri_valley'
+  | 'tech_corridor';
+
 export interface CityMarket {
+  id?: string;
   name: string;
+  biome?: CityBiome;
   population: number;
   growthRate: number;
   averageWage: number;
-  consumerConfidence: number; // 0 to 100
-  housingSupply?: number;     // Total citizen housing capacity across civic, private apts & resident houses
-  residentHousesCount?: number; // Active automated resident-owned homes
+  consumerConfidence: number;
+  housingSupply?: number;
+  residentHousesCount?: number;
+  gridSize?: number;
+  mapParcels?: MapParcel[];
+  mayorEntityId?: string;
+  mayorName?: string;
+  cityTaxRate?: number;
+  publicHousingBudget?: number;
+  landGrantDiscount?: number;
+  approvalRating?: number;
+  foundedMonth?: number;
 
   productStats: Record<ProductId, {
     monthlyDemand: number;
@@ -253,7 +339,7 @@ export interface StockTransaction {
   month: number;
   buyerCompanyId: string;
   targetCompanyId: string;
-  action: 'buy' | 'sell' | 'issue' | 'merger';
+  action: 'buy' | 'sell' | 'issue' | 'merger' | 'ipo' | 'spinoff' | 'takeover';
   shares: number;
   pricePerShare: number;
   totalCost: number;
@@ -263,11 +349,12 @@ export interface MapParcel {
   x: number;
   y: number;
   terrainType: 'grass' | 'road' | 'water' | 'pavement' | 'industrial_zone';
+  terrainVariant?: 'meadow' | 'forest' | 'fertile' | 'rocky' | 'plaza' | 'concrete' | 'harbor';
   facilityId?: string;
   ownerCompanyId?: string;
   isZoneAllowed: boolean;
   landValue: number;
-  trafficIndex: number; // 0 to 100 CapLab crowd & foot traffic score
+  trafficIndex: number;
   districtName?: string;
   resourceDeposit?: ResourceDeposit;
   landStatus?: 'public' | 'for_sale' | 'corporate' | 'resident';
@@ -282,15 +369,21 @@ export interface SimulationState {
   playerCompanyId: string;
   companies: Record<string, Company>;
   facilities: Record<string, Facility>;
-  city: CityMarket;
+  city: CityMarket; // Active/primary city alias kept synchronized with cities[activeCityId]
+  cities?: Record<string, CityMarket>;
+  cityOrder?: string[];
+  activeCityId?: string;
   macro: MacroEconomy;
-  mapParcels: MapParcel[];
+  mapParcels: MapParcel[]; // Active city parcels alias kept synchronized with active city
   stockTransactions: StockTransaction[];
+  aiEntities?: Record<string, AiPersonEntity>;
+  aiEntityOrder?: string[];
+  government?: GovernmentState;
 
   newsFeed: {
     id: string;
     month: number;
-    category: 'economy' | 'competitor' | 'finance' | 'rnd';
+    category: 'economy' | 'competitor' | 'finance' | 'rnd' | 'politics';
     title: string;
     detail: string;
   }[];

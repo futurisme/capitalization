@@ -3,6 +3,7 @@
 Structural & Binary Verifier for Custom-Compiled Windows 11 PE32+ Binaries.
 Audits DOS/PE headers, CheckSum, section table, Import Directory / IAT slots,
 and embedded RT_MANIFEST resource XML without relying on external tools.
+Supports both WINDOWS_GUI (2) and WINDOWS_CUI (3) PE32+ executables.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import pathlib
 import struct
 import sys
+from typing import Optional
 
 from custom_pe64_compiler import compute_pe_checksum
 
@@ -27,7 +29,11 @@ def read_cstr(buf: bytes, off: int) -> str:
     return buf[off:end].decode("ascii")
 
 
-def verify_pe64(exe_path: pathlib.Path) -> None:
+def verify_pe64(
+    exe_path: pathlib.Path,
+    expected_subsystem: Optional[int] = None,
+    require_launcher_imports: bool = True,
+) -> None:
     raw = exe_path.read_bytes()
     assert raw[:2] == b"MZ", "Missing MZ header"
     e_lfanew = struct.unpack_from("<I", raw, 0x3C)[0]
@@ -46,7 +52,9 @@ def verify_pe64(exe_path: pathlib.Path) -> None:
     entry_rva = struct.unpack_from("<I", raw, opt_off + 16)[0]
     stored_sum = struct.unpack_from("<I", raw, opt_off + 64)[0]
     subsystem, dll_chars = struct.unpack_from("<HH", raw, opt_off + 68)
-    assert subsystem == 2, f"Expected WINDOWS_GUI (2), got {subsystem}"
+    target_sub = expected_subsystem if expected_subsystem is not None else (2 if require_launcher_imports else subsystem)
+    assert subsystem in (2, 3), f"Unsupported PE subsystem: {subsystem}"
+    assert subsystem == target_sub, f"Expected subsystem {target_sub}, got {subsystem}"
     assert (dll_chars & 0x8160) == 0x8160, "Missing HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT"
 
     calc_sum = compute_pe_checksum(bytearray(raw), opt_off + 64)
@@ -68,12 +76,10 @@ def verify_pe64(exe_path: pathlib.Path) -> None:
         assert roff + rsize <= len(raw), f"Section {name} raw bounds exceed file"
         sections.append((name, vsize, s_rva, rsize, roff, schars))
 
-    # Check entrypoint sits in executable .text section
     text_sec = sections[0]
     assert text_sec[0] == ".text" and (text_sec[5] & 0x20000020) == 0x20000020
     assert text_sec[2] <= entry_rva < text_sec[2] + text_sec[1], "Entrypoint outside .text"
 
-    # Verify Import Directory DLLs & functions
     imp_off = rva_to_offset(imp_rva, sections)
     imported: dict[str, list[str]] = {}
     cursor = imp_off
@@ -98,13 +104,15 @@ def verify_pe64(exe_path: pathlib.Path) -> None:
         imported[dll] = funcs
         cursor += 20
 
-    assert imported == {
-        "KERNEL32.dll": ["GetModuleFileNameW", "GetFileAttributesW", "ExitProcess"],
-        "SHELL32.dll": ["ShellExecuteW"],
-        "USER32.dll": ["MessageBoxW"],
-    }, f"Unexpected import table: {imported}"
+    if require_launcher_imports:
+        assert imported == {
+            "KERNEL32.dll": ["GetModuleFileNameW", "GetFileAttributesW", "ExitProcess"],
+            "SHELL32.dll": ["ShellExecuteW"],
+            "USER32.dll": ["MessageBoxW"],
+        }, f"Unexpected import table: {imported}"
+    else:
+        assert len(imported) >= 1 and "KERNEL32.dll" in imported, "Expected KERNEL32.dll imports"
 
-    # Verify .rsrc RT_MANIFEST (24 -> 1 -> 1033)
     rsrc_off = rva_to_offset(rsrc_rva, sections)
     type_id, type_off = struct.unpack_from("<II", raw, rsrc_off + 16)
     assert type_id == 24 and (type_off & 0x80000000), "Missing RT_MANIFEST directory"
@@ -116,17 +124,19 @@ def verify_pe64(exe_path: pathlib.Path) -> None:
     data_rva, data_sz, _, _ = struct.unpack_from("<IIII", raw, rsrc_off + data_entry_rel)
     manifest_off = rva_to_offset(data_rva, sections)
     manifest_xml = raw[manifest_off:manifest_off + data_sz].decode("utf-8")
-    assert 'level="requireAdministrator"' in manifest_xml, "Missing requireAdministrator in manifest"
+    if require_launcher_imports:
+        assert 'level="requireAdministrator"' in manifest_xml, "Missing requireAdministrator in manifest"
     assert "PerMonitorV2" in manifest_xml, "Missing PerMonitorV2 in manifest"
     assert "SegmentHeap" in manifest_xml, "Missing SegmentHeap in manifest"
 
+    sub_label = "GUI" if subsystem == 2 else "CUI"
     print(
-        f"[VERIFIED PE32+] {exe_path} ({len(raw)} bytes) | "
-        f"Imports={sum(len(v) for v in imported.values())} | "
-        f"Manifest=requireAdministrator | CheckSum=0x{stored_sum:08X}"
+        f"[VERIFIED PE32+] {exe_path.name} ({sub_label}, {len(raw)} B) | "
+        f"Imports={sum(len(v) for v in imported.values())} | CheckSum=0x{stored_sum:08X}"
     )
 
 
 if __name__ == "__main__":
     target = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("exe/game.exe")
-    verify_pe64(target)
+    cui_mode = "--cui" in sys.argv[2:]
+    verify_pe64(target, expected_subsystem=3 if cui_mode else None, require_launcher_imports=not cui_mode)

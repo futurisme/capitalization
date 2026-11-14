@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-CapLab 13 Independent x86_64 Macro-Assembler & Windows 11 PE32+ Linker
------------------------------------------------------------------------
+CapLab 13 Independent x86_64 Macro-Assembler, Translator & Windows 11 PE32+ Linker
+------------------------------------------------------------------------------------
 100% zero-third-party custom compiler/linker built strictly on Python stdlib.
-Assembles .casm (CapLab x64 Assembly) directly into hardened Windows 11
-PE32+ executables with:
+Translates .casm (CapLab x64 Assembly) directly into hardened Windows 11
+PE32+ executables (both WINDOWS_GUI and WINDOWS_CUI subsystems) with:
   - PE32+ (AMD64) Headers + Standard PE Checksum
-  - ASLR (HIGH_ENTROPY_VA | DYNAMIC_BASE) + NX_COMPAT
-  - .text (RIP-relative x86_64 machine code)
-  - .rdata (Import Directory Table, ILT, Hint/Name Table, IAT, UTF-16LE strings)
-  - .data (BSS-backed zero-initialized RW static buffers)
-  - .rsrc (Embedded Win32 RT_MANIFEST with requireAdministrator & Win11 settings)
+  - ASLR (HIGH_ENTROPY_VA | DYNAMIC_BASE) + NX_COMPAT | TERMINAL_SERVER_AWARE
+  - .text (RIP-relative & indexed x86_64 machine code)
+  - .rdata (Import Directory Table, ILT, Hint/Name Table, IAT, UTF-16LE & ANSI/UTF-8 strings)
+  - .data (BSS-backed zero-initialized RW static buffers + initialized qword/dword constants)
+  - .rsrc (Embedded Win32 RT_MANIFEST with PerMonitorV2, SegmentHeap & UAC settings)
 """
 
 from __future__ import annotations
@@ -57,11 +57,17 @@ REG16 = {
     "ax": 0, "cx": 1, "dx": 2, "bx": 3,
     "sp": 4, "bp": 5, "si": 6, "di": 7,
 }
+REG8 = {
+    "al": 0, "cl": 1, "dl": 2, "bl": 3,
+    "spl": 4, "bpl": 5, "sil": 6, "dil": 7,
+    "r8b": 8, "r9b": 9, "r10b": 10, "r11b": 11,
+    "r12b": 12, "r13b": 13, "r14b": 14, "r15b": 15,
+}
 
 
-def rex_byte(w: int = 0, r: int = 0, x: int = 0, b: int = 0) -> bytes:
+def rex_byte(w: int = 0, r: int = 0, x: int = 0, b: int = 0, force: bool = False) -> bytes:
     val = 0x40 | (w << 3) | ((r >> 3) << 2) | ((x >> 3) << 1) | (b >> 3)
-    return bytes([val]) if val != 0x40 else b""
+    return bytes([val]) if (val != 0x40 or force) else b""
 
 
 def modrm(mod: int, reg: int, rm: int) -> int:
@@ -82,6 +88,7 @@ class ProgramIR:
     manifest_xml: str = ""
     imports: Dict[str, List[str]] = field(default_factory=dict)
     wstrings: Dict[str, str] = field(default_factory=dict)
+    astrings: Dict[str, bytes] = field(default_factory=dict)
     data_buffers: Dict[str, int] = field(default_factory=dict)
     text_lines: List[Tuple[int, str]] = field(default_factory=list)
 
@@ -99,7 +106,7 @@ def unescape_string(raw: str) -> str:
 
 def parse_int(token: str) -> int:
     token = token.strip()
-    if token.lower().startswith("0x"):
+    if token.lower().startswith("0x") or token.lower().startswith("-0x"):
         return int(token, 16)
     return int(token, 10)
 
@@ -158,12 +165,19 @@ def parse_casm(source: str) -> ProgramIR:
                 raise SyntaxError(f"Line {lineno}: invalid .imports syntax: {stripped}")
             dll = m.group(1).strip()
             funcs = [f.strip() for f in m.group(2).split(",") if f.strip()]
-            ir.imports.setdefault(dll, []).extend(funcs)
+            existing = ir.imports.setdefault(dll, [])
+            for fn in funcs:
+                if fn not in existing:
+                    existing.append(fn)
         elif section == ".rdata":
-            m = re.match(r'^([A-Za-z0-9_]+)\s+wstring\s+"((?:[^"\\]|\\.)*)"$', stripped)
-            if not m:
-                raise SyntaxError(f"Line {lineno}: invalid .rdata wstring syntax: {stripped}")
-            ir.wstrings[m.group(1)] = unescape_string(m.group(2))
+            m_w = re.match(r'^([A-Za-z0-9_]+)\s+wstring\s+"((?:[^"\\]|\\.)*)"$', stripped)
+            m_a = re.match(r'^([A-Za-z0-9_]+)\s+astr\s+"((?:[^"\\]|\\.)*)"$', stripped)
+            if m_w:
+                ir.wstrings[m_w.group(1)] = unescape_string(m_w.group(2))
+            elif m_a:
+                ir.astrings[m_a.group(1)] = unescape_string(m_a.group(2)).encode("utf-8") + b"\x00"
+            else:
+                raise SyntaxError(f"Line {lineno}: invalid .rdata syntax (expected wstring or astr): {stripped}")
         elif section == ".data":
             m = re.match(r'^([A-Za-z0-9_]+)\s+resb\s+(\S+)$', stripped)
             if not m:
@@ -203,6 +217,16 @@ def assemble_text(lines: List[Tuple[int, str]]) -> Tuple[bytearray, Dict[str, in
             parts.append("".join(cur).strip())
         return parts
 
+    jcc_opcodes = {
+        "jmp": b"\xE9",
+        "jz":  b"\x0F\x84", "je":  b"\x0F\x84",
+        "jnz": b"\x0F\x85", "jne": b"\x0F\x85",
+        "jbe": b"\x0F\x86", "ja":  b"\x0F\x87",
+        "jl":  b"\x0F\x8C", "jge": b"\x0F\x8D",
+        "jle": b"\x0F\x8E", "jg":  b"\x0F\x8F",
+        "js":  b"\x0F\x88", "jns": b"\x0F\x89",
+    }
+
     for lineno, stmt in lines:
         if stmt.endswith(":"):
             lbl = stmt[:-1].strip()
@@ -229,41 +253,54 @@ def assemble_text(lines: List[Tuple[int, str]]) -> Tuple[bytearray, Dict[str, in
             if r >= 8:
                 emit(b"\x41")
             emit(bytes([0x58 + (r & 7)]))
-        elif mnem == "sub" and len(ops) == 2 and ops[0] in REG64:
+        elif mnem == "inc" and len(ops) == 1 and ops[0] in REG64:
             r = REG64[ops[0]]
-            imm = parse_int(ops[1])
-            emit(rex_byte(w=1, b=r))
-            if -128 <= imm <= 127:
-                emit(bytes([0x83, modrm(3, 5, r)]) + struct.pack("<b", imm))
-            else:
-                emit(bytes([0x81, modrm(3, 5, r)]) + struct.pack("<i", imm))
-        elif mnem == "add" and len(ops) == 2 and ops[0] in REG64:
+            emit(rex_byte(w=1, b=r) + bytes([0xFF, modrm(3, 0, r)]))
+        elif mnem == "dec" and len(ops) == 1 and ops[0] in REG64:
             r = REG64[ops[0]]
-            imm = parse_int(ops[1])
-            emit(rex_byte(w=1, b=r))
-            if -128 <= imm <= 127:
-                emit(bytes([0x83, modrm(3, 0, r)]) + struct.pack("<b", imm))
+            emit(rex_byte(w=1, b=r) + bytes([0xFF, modrm(3, 1, r)]))
+        elif mnem in ("add", "sub", "and", "or") and len(ops) == 2 and ops[0] in REG64:
+            alu_ext = {"add": 0, "or": 1, "and": 4, "sub": 5}[mnem]
+            alu_rr = {"add": 0x01, "or": 0x09, "and": 0x21, "sub": 0x29}[mnem]
+            dst = REG64[ops[0]]
+            if ops[1] in REG64:
+                src = REG64[ops[1]]
+                emit(rex_byte(w=1, r=src, b=dst) + bytes([alu_rr, modrm(3, src, dst)]))
             else:
-                emit(bytes([0x81, modrm(3, 0, r)]) + struct.pack("<i", imm))
+                imm = parse_int(ops[1])
+                emit(rex_byte(w=1, b=dst))
+                if -128 <= imm <= 127:
+                    emit(bytes([0x83, modrm(3, alu_ext, dst)]) + struct.pack("<b", imm))
+                else:
+                    emit(bytes([0x81, modrm(3, alu_ext, dst)]) + struct.pack("<i", imm))
+        elif mnem in ("shl", "shr") and len(ops) == 2 and ops[0] in REG64:
+            dst = REG64[ops[0]]
+            imm = parse_int(ops[1]) & 0x3F
+            ext = 4 if mnem == "shl" else 5
+            emit(rex_byte(w=1, b=dst) + bytes([0xC1, modrm(3, ext, dst), imm]))
         elif mnem == "xor" and len(ops) == 2 and ops[0] in REG32 and ops[1] in REG32:
             dst, src = REG32[ops[0]], REG32[ops[1]]
-            emit(rex_byte(w=0, r=src, b=dst))
-            emit(bytes([0x31, modrm(3, src, dst)]))
+            emit(rex_byte(w=0, r=src, b=dst) + bytes([0x31, modrm(3, src, dst)]))
         elif mnem == "xor" and len(ops) == 2 and ops[0] in REG64 and ops[1] in REG64:
             dst, src = REG64[ops[0]], REG64[ops[1]]
-            emit(rex_byte(w=1, r=src, b=dst))
-            emit(bytes([0x31, modrm(3, src, dst)]))
+            emit(rex_byte(w=1, r=src, b=dst) + bytes([0x31, modrm(3, src, dst)]))
+        elif mnem == "test" and len(ops) == 2 and ops[0] in REG8 and ops[1] in REG8:
+            dst, src = REG8[ops[0]], REG8[ops[1]]
+            force_rex = (dst >= 4 or src >= 4)
+            emit(rex_byte(w=0, r=src, b=dst, force=force_rex) + bytes([0x84, modrm(3, src, dst)]))
         elif mnem == "test" and len(ops) == 2 and ops[0] in REG16 and ops[1] in REG16:
             dst, src = REG16[ops[0]], REG16[ops[1]]
             emit(bytes([0x66, 0x85, modrm(3, src, dst)]))
         elif mnem == "test" and len(ops) == 2 and ops[0] in REG32 and ops[1] in REG32:
             dst, src = REG32[ops[0]], REG32[ops[1]]
-            emit(rex_byte(w=0, r=src, b=dst))
-            emit(bytes([0x85, modrm(3, src, dst)]))
+            emit(rex_byte(w=0, r=src, b=dst) + bytes([0x85, modrm(3, src, dst)]))
         elif mnem == "test" and len(ops) == 2 and ops[0] in REG64 and ops[1] in REG64:
             dst, src = REG64[ops[0]], REG64[ops[1]]
-            emit(rex_byte(w=1, r=src, b=dst))
-            emit(bytes([0x85, modrm(3, src, dst)]))
+            emit(rex_byte(w=1, r=src, b=dst) + bytes([0x85, modrm(3, src, dst)]))
+        elif mnem == "cmp" and len(ops) == 2 and ops[0] in REG8:
+            dst = REG8[ops[0]]
+            imm = parse_int(ops[1]) & 0xFF
+            emit(rex_byte(w=0, b=dst, force=(dst >= 4)) + bytes([0x80, modrm(3, 7, dst), imm]))
         elif mnem == "cmp" and len(ops) == 2 and ops[0] in REG16:
             dst = REG16[ops[0]]
             imm = parse_int(ops[1])
@@ -273,31 +310,63 @@ def assemble_text(lines: List[Tuple[int, str]]) -> Tuple[bytearray, Dict[str, in
                 emit(bytes([0x66, 0x81, modrm(3, 7, dst)]) + struct.pack("<H", imm & 0xFFFF))
         elif mnem == "cmp" and len(ops) == 2 and ops[0] in REG32:
             dst = REG32[ops[0]]
-            imm = parse_int(ops[1])
-            emit(rex_byte(w=0, b=dst))
-            if -128 <= imm <= 127:
-                emit(bytes([0x83, modrm(3, 7, dst)]) + struct.pack("<b", imm))
+            if ops[1] in REG32:
+                src = REG32[ops[1]]
+                emit(rex_byte(w=0, r=src, b=dst) + bytes([0x39, modrm(3, src, dst)]))
             else:
-                emit(bytes([0x81, modrm(3, 7, dst)]) + struct.pack("<I", imm & 0xFFFFFFFF))
+                imm = parse_int(ops[1])
+                emit(rex_byte(w=0, b=dst))
+                if -128 <= imm <= 127:
+                    emit(bytes([0x83, modrm(3, 7, dst)]) + struct.pack("<b", imm))
+                else:
+                    emit(bytes([0x81, modrm(3, 7, dst)]) + struct.pack("<I", imm & 0xFFFFFFFF))
         elif mnem == "cmp" and len(ops) == 2 and ops[0] in REG64:
             dst = REG64[ops[0]]
-            imm = parse_int(ops[1])
-            emit(rex_byte(w=1, b=dst))
-            if -128 <= imm <= 127:
-                emit(bytes([0x83, modrm(3, 7, dst)]) + struct.pack("<b", imm))
+            if ops[1] in REG64:
+                src = REG64[ops[1]]
+                emit(rex_byte(w=1, r=src, b=dst) + bytes([0x39, modrm(3, src, dst)]))
             else:
-                emit(bytes([0x81, modrm(3, 7, dst)]) + struct.pack("<i", imm))
+                imm = parse_int(ops[1])
+                emit(rex_byte(w=1, b=dst))
+                if -128 <= imm <= 127:
+                    emit(bytes([0x83, modrm(3, 7, dst)]) + struct.pack("<b", imm))
+                else:
+                    emit(bytes([0x81, modrm(3, 7, dst)]) + struct.pack("<i", imm))
         elif mnem == "mov" and len(ops) == 2:
             dst_s, src_s = ops[0], ops[1]
             if dst_s in REG64 and src_s in REG64:
                 d, s = REG64[dst_s], REG64[src_s]
-                emit(rex_byte(w=1, r=s, b=d))
-                emit(bytes([0x89, modrm(3, s, d)]))
+                emit(rex_byte(w=1, r=s, b=d) + bytes([0x89, modrm(3, s, d)]))
+            elif dst_s in REG64:
+                d = REG64[dst_s]
+                imm = parse_int(src_s)
+                if -0x80000000 <= imm <= 0x7FFFFFFF:
+                    emit(rex_byte(w=1, b=d) + bytes([0xC7, modrm(3, 0, d)]) + struct.pack("<i", imm))
+                else:
+                    emit(rex_byte(w=1, b=d) + bytes([0xB8 + (d & 7)]) + struct.pack("<Q", imm & 0xFFFFFFFFFFFFFFFF))
+            elif dst_s in REG32 and src_s in REG32:
+                d, s = REG32[dst_s], REG32[src_s]
+                emit(rex_byte(w=0, r=s, b=d) + bytes([0x89, modrm(3, s, d)]))
+            elif dst_s in REG32 and src_s.startswith("dword [rsp + ") and src_s.endswith("]"):
+                disp = parse_int(src_s[len("dword [rsp + "):-1])
+                d = REG32[dst_s]
+                emit(rex_byte(w=0, r=d) + bytes([0x8B, modrm(1, d, 4), 0x24]) + struct.pack("<b", disp))
             elif dst_s in REG32:
                 d = REG32[dst_s]
                 imm = parse_int(src_s)
-                emit(rex_byte(w=0, b=d))
-                emit(bytes([0xB8 + (d & 7)]) + struct.pack("<I", imm & 0xFFFFFFFF))
+                emit(rex_byte(w=0, b=d) + bytes([0xB8 + (d & 7)]) + struct.pack("<I", imm & 0xFFFFFFFF))
+            elif dst_s in REG8 and src_s.startswith("[") and src_s.endswith("]"):
+                base_s = src_s[1:-1].strip()
+                if base_s not in REG64 or REG64[base_s] in (4, 5, 12, 13):
+                    raise SyntaxError(f"Line {lineno}: unsupported base in {stmt}")
+                d, b = REG8[dst_s], REG64[base_s]
+                emit(rex_byte(w=0, r=d, b=b, force=(d >= 4)) + bytes([0x8A, modrm(0, d, b)]))
+            elif dst_s.startswith("[") and dst_s.endswith("]") and src_s in REG8:
+                base_s = dst_s[1:-1].strip()
+                if base_s not in REG64 or REG64[base_s] in (4, 5, 12, 13):
+                    raise SyntaxError(f"Line {lineno}: unsupported base in {stmt}")
+                b, s = REG64[base_s], REG8[src_s]
+                emit(rex_byte(w=0, r=s, b=b, force=(s >= 4)) + bytes([0x88, modrm(0, s, b)]))
             elif dst_s in REG16 and src_s.startswith("[") and src_s.endswith("]"):
                 base_s = src_s[1:-1].strip()
                 if base_s not in REG64 or REG64[base_s] in (4, 5, 12, 13):
@@ -320,8 +389,11 @@ def assemble_text(lines: List[Tuple[int, str]]) -> Tuple[bytearray, Dict[str, in
             elif dst_s.startswith("qword [rsp + ") and dst_s.endswith("]") and src_s in REG64:
                 disp = parse_int(dst_s[len("qword [rsp + "):-1])
                 s = REG64[src_s]
-                emit(rex_byte(w=1, r=s))
-                emit(bytes([0x89, modrm(1, s, 4), 0x24]) + struct.pack("<b", disp))
+                emit(rex_byte(w=1, r=s) + bytes([0x89, modrm(1, s, 4), 0x24]) + struct.pack("<b", disp))
+            elif dst_s.startswith("dword [rsp + ") and dst_s.endswith("]") and src_s in REG32:
+                disp = parse_int(dst_s[len("dword [rsp + "):-1])
+                s = REG32[src_s]
+                emit(rex_byte(w=0, r=s) + bytes([0x89, modrm(1, s, 4), 0x24]) + struct.pack("<b", disp))
             elif dst_s.startswith("dword [rsp + ") and dst_s.endswith("]"):
                 disp = parse_int(dst_s[len("dword [rsp + "):-1])
                 imm = parse_int(src_s)
@@ -338,8 +410,7 @@ def assemble_text(lines: List[Tuple[int, str]]) -> Tuple[bytearray, Dict[str, in
             m_rip = re.match(r'^\[rip\s*\+\s*([A-Za-z0-9_]+)\]$', rhs)
             m_off = re.match(r'^\[([A-Za-z0-9_]+)\s*\+\s*(\S+)\]$', rhs)
             if m_rip:
-                emit(rex_byte(w=1, r=dst))
-                emit(bytes([0x8D, modrm(0, dst, 5)]))
+                emit(rex_byte(w=1, r=dst) + bytes([0x8D, modrm(0, dst, 5)]))
                 fix_off = len(code)
                 emit(b"\x00\x00\x00\x00")
                 fixups.append(Fixup(fix_off, "rip_sym", m_rip.group(1), len(code)))
@@ -348,18 +419,11 @@ def assemble_text(lines: List[Tuple[int, str]]) -> Tuple[bytearray, Dict[str, in
                 disp = parse_int(m_off.group(2))
                 if base in (4, 12):
                     raise SyntaxError(f"Line {lineno}: rsp/r12 unsupported here")
-                emit(rex_byte(w=1, r=dst, b=base))
-                emit(bytes([0x8D, modrm(1, dst, base)]) + struct.pack("<b", disp))
+                emit(rex_byte(w=1, r=dst, b=base) + bytes([0x8D, modrm(1, dst, base)]) + struct.pack("<b", disp))
             else:
                 raise SyntaxError(f"Line {lineno}: unsupported lea form: {stmt}")
-        elif mnem in ("jmp", "jz", "je", "jnz", "jne", "jbe", "ja") and len(ops) == 1:
-            opcodes = {
-                "jmp": b"\xE9",
-                "jz":  b"\x0F\x84", "je":  b"\x0F\x84",
-                "jnz": b"\x0F\x85", "jne": b"\x0F\x85",
-                "jbe": b"\x0F\x86", "ja":  b"\x0F\x87",
-            }
-            emit(opcodes[mnem])
+        elif mnem in jcc_opcodes and len(ops) == 1:
+            emit(jcc_opcodes[mnem])
             fix_off = len(code)
             emit(b"\x00\x00\x00\x00")
             fixups.append(Fixup(fix_off, "rel32_code", ops[0], len(code)))
@@ -387,12 +451,6 @@ def build_rsrc_section(rsrc_rva: int, manifest_bytes: bytes) -> bytes:
     Constructs a standard PE .rsrc tree:
       Root Dir -> RT_MANIFEST (24) -> ID 1 -> Lang 1033 -> DataEntry -> manifest XML
     """
-    # Layout sizes:
-    # 0x00: Root dir (16 + 8 = 24)
-    # 0x18: Type 24 dir (16 + 8 = 24)
-    # 0x30: ID 1 dir (16 + 8 = 24)
-    # 0x48: Data entry (16)
-    # 0x58: Manifest bytes
     data_offset = 0x58
     data_rva = rsrc_rva + data_offset
 
@@ -422,14 +480,12 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
     FILE_ALIGN = 0x200
     IMAGE_BASE = 0x0000000140000000
 
-    # Section RVAs
     text_rva = 0x1000
     text_vsize = len(text_code)
     text_rsize = align_up(text_vsize, FILE_ALIGN)
 
     rdata_rva = text_rva + align_up(max(1, text_vsize), SECTION_ALIGN)
 
-    # Build .rdata (Import Directory, ILT, IAT, Strings, UTF-16LE literals)
     dll_names = list(ir.imports.keys())
     num_dlls = len(dll_names)
     idt_size = (num_dlls + 1) * 20
@@ -439,7 +495,6 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
     iat_offset = idt_size + ilt_size
     iat_size = ilt_size
 
-    # Reserve UTF-16LE string offsets after IAT
     cursor = align_up(iat_offset + iat_size, 8)
     sym_rvas: Dict[str, int] = {}
 
@@ -449,6 +504,10 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
             rdata_strings.append(0)
         sym_rvas[sym_name] = rdata_rva + cursor + len(rdata_strings)
         rdata_strings.extend((text_val + "\0").encode("utf-16-le"))
+
+    for sym_name, raw_bytes in ir.astrings.items():
+        sym_rvas[sym_name] = rdata_rva + cursor + len(rdata_strings)
+        rdata_strings.extend(raw_bytes)
 
     hint_base_offset = cursor + len(rdata_strings)
     hint_base_offset = align_up(hint_base_offset, 2)
@@ -468,12 +527,10 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
                 hint_blob.append(0)
 
     rdata_buf = bytearray(hint_base_offset + len(hint_blob))
-    # Populate wstrings
     str_start = cursor
     rdata_buf[str_start:str_start + len(rdata_strings)] = rdata_strings
     rdata_buf[hint_base_offset:hint_base_offset + len(hint_blob)] = hint_blob
 
-    # Populate Import Directory Table, ILT, and IAT
     ilt_cursor = idt_size
     iat_cursor = iat_offset
     for i, dll in enumerate(dll_names):
@@ -490,14 +547,12 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
             struct.pack_into("<Q", rdata_buf, iat_cursor, hint_rva)
             ilt_cursor += 8
             iat_cursor += 8
-        # Null terminator for this DLL's ILT/IAT
         ilt_cursor += 8
         iat_cursor += 8
 
     rdata_vsize = len(rdata_buf)
     rdata_rsize = align_up(rdata_vsize, FILE_ALIGN)
 
-    # .data section
     data_rva = rdata_rva + align_up(max(1, rdata_vsize), SECTION_ALIGN)
     data_cursor = 0
     for buf_name, buf_bytes in ir.data_buffers.items():
@@ -508,14 +563,13 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
     data_buf = bytearray(data_vsize)
     data_rsize = align_up(data_vsize, FILE_ALIGN)
 
-    # .rsrc section
+    has_manifest = bool(ir.manifest_xml.strip())
     rsrc_rva = data_rva + align_up(max(1, data_vsize), SECTION_ALIGN)
-    manifest_bytes = ir.manifest_xml.strip().encode("utf-8") + b"\n"
-    rsrc_buf = build_rsrc_section(rsrc_rva, manifest_bytes)
+    manifest_bytes = (ir.manifest_xml.strip().encode("utf-8") + b"\n") if has_manifest else b""
+    rsrc_buf = build_rsrc_section(rsrc_rva, manifest_bytes) if has_manifest else b"\x00" * 16
     rsrc_vsize = len(rsrc_buf)
     rsrc_rsize = align_up(rsrc_vsize, FILE_ALIGN)
 
-    # Patch RIP-relative and local relative fixups in .text
     for fx in fixups:
         if fx.kind == "rel32_code":
             if fx.target not in labels:
@@ -529,7 +583,6 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
             disp = sym_rvas[fx.target] - instr_end_rva
             struct.pack_into("<i", text_code, fx.offset_in_text, disp)
 
-    # Headers layout
     e_lfanew = 0x80
     num_sections = 4
     size_of_headers = align_up(e_lfanew + 4 + 20 + 240 + num_sections * 40, FILE_ALIGN)
@@ -543,34 +596,30 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
 
     pe = bytearray(total_file_size)
 
-    # DOS Header + tiny DOS stub
-    struct.pack_into("<H", pe, 0x00, 0x5A4D)  # "MZ"
+    struct.pack_into("<H", pe, 0x00, 0x5A4D)
     struct.pack_into("<I", pe, 0x3C, e_lfanew)
     dos_msg = b"\x0E\x1F\xBA\x0E\x00\xB4\x09\xCD\x21\xB8\x01\x4C\xCD\x21CapLab13 Win64 PE\r\n$"
     pe[0x40:0x40 + len(dos_msg)] = dos_msg
 
-    # PE Signature
     pe[e_lfanew:e_lfanew + 4] = b"PE\x00\x00"
 
-    # COFF File Header (20 bytes)
     coff_off = e_lfanew + 4
     struct.pack_into(
         "<HHIIIHH", pe, coff_off,
-        0x8664,       # Machine = AMD64
+        0x8664,
         num_sections,
-        0x6916A000,   # Reproducible timestamp (Nov 2026)
-        0, 0,         # PointerToSymbolTable, NumberOfSymbols
-        0x00F0,       # SizeOfOptionalHeader (240)
-        0x0022,       # Characteristics: EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+        0x6916A000,
+        0, 0,
+        0x00F0,
+        0x0022,
     )
 
-    # Optional Header PE32+ (240 bytes)
     opt_off = coff_off + 20
     entry_rva = text_rva + labels["_start"]
     struct.pack_into(
         "<HBBIIIII", pe, opt_off,
-        0x020B,       # Magic = PE32+
-        13, 0,        # Linker 13.0
+        0x020B,
+        13, 0,
         text_rsize,
         rdata_rsize + data_rsize + rsrc_rsize,
         0,
@@ -582,31 +631,27 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
         IMAGE_BASE,
         SECTION_ALIGN,
         FILE_ALIGN,
-        10, 0,        # OS 10.0 (Windows 10/11)
-        13, 0,        # Image 13.0
-        6, 0,         # Subsystem 6.0
-        0,            # Win32VersionValue
+        10, 0,
+        13, 0,
+        6, 0,
+        0,
         size_of_image,
         size_of_headers,
-        0,            # CheckSum (patched at end)
-        ir.subsystem, # 2 = WINDOWS_GUI, 3 = WINDOWS_CUI
-        0x8160,       # HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT | TERMINAL_SERVER_AWARE
+        0,
+        ir.subsystem,
+        0x8160,
         0x100000, 0x1000,
         0x100000, 0x1000,
         0,
         16,
     )
 
-    # Data Directories (16 entries * 8 bytes = 128 bytes) at opt_off + 112
     dd_off = opt_off + 112
-    # [1] Import Directory
     struct.pack_into("<II", pe, dd_off + 1 * 8, rdata_rva, idt_size)
-    # [2] Resource Directory
-    struct.pack_into("<II", pe, dd_off + 2 * 8, rsrc_rva, rsrc_vsize)
-    # [12] IAT Directory
+    if has_manifest:
+        struct.pack_into("<II", pe, dd_off + 2 * 8, rsrc_rva, rsrc_vsize)
     struct.pack_into("<II", pe, dd_off + 12 * 8, rdata_rva + iat_offset, iat_size)
 
-    # Section Headers (4 * 40 bytes)
     sec_off = opt_off + 240
     sections = [
         (b".text\x00\x00\x00",  text_vsize,  text_rva,  text_rsize,  text_raw_off,  0x60000020),
@@ -620,21 +665,20 @@ def compile_casm_to_pe64(source_path: pathlib.Path, out_path: pathlib.Path) -> N
             name8, vsize, rva, rsize, roff, 0, 0, 0, 0, chars
         )
 
-    # Copy Section Raw Data
     pe[text_raw_off:text_raw_off + len(text_code)] = text_code
     pe[rdata_raw_off:rdata_raw_off + len(rdata_buf)] = rdata_buf
     pe[data_raw_off:data_raw_off + len(data_buf)] = data_buf
     pe[rsrc_raw_off:rsrc_raw_off + len(rsrc_buf)] = rsrc_buf
 
-    # Patch PE CheckSum
     checksum = compute_pe_checksum(pe, opt_off + 64)
     struct.pack_into("<I", pe, opt_off + 64, checksum)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(pe)
+    sub_name = "GUI" if ir.subsystem == 2 else "CUI"
     print(
-        f"[CapLab Custom PE64 Compiler] Built {out_path} ({len(pe)} bytes, "
-        f"entry=0x{entry_rva:04X}, checksum=0x{checksum:08X})"
+        f"[CC-PE64] {out_path.name} | {sub_name} x86-64 | {len(pe)} B | "
+        f".text={text_vsize}B .rdata={rdata_vsize}B | entry=0x{entry_rva:04X} | crc=0x{checksum:08X}"
     )
 
 

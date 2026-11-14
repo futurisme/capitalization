@@ -958,6 +958,210 @@ export function drawProductVisual(ctx: CanvasRenderingContext2D, id: ProductId |
       break;
     }
 
+    case 'timber': {
+      // Stacked natural cut hardwood logs with concentric bark rings & green leaf accent
+      for (const [cx, cy, r] of [
+        [76, 118, 22],
+        [114, 118, 22],
+        [95, 86, 22],
+      ] as const) {
+        ctx.fillStyle = '#5c3317';
+        rr(ctx, cx - r, cy - r * 0.85, r * 2, r * 1.7, 6);
+        ctx.fill();
+        ctx.fillStyle = '#deb887';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 0.82, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#8b5a2b';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 0.56, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 0.26, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      break;
+    }
+
+    case 'coffee_bean': {
+      // Jute bean tray with glossy dark arabica beans showing S-crease
+      const trayG = ctx.createRadialGradient(96, 100, 12, 96, 100, 56);
+      trayG.addColorStop(0, '#4ade80');
+      trayG.addColorStop(0.6, '#15803d');
+      trayG.addColorStop(1, '#14532d');
+      ctx.fillStyle = trayG;
+      ctx.beginPath();
+      ctx.ellipse(96, 102, 54, 34, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (const [bx, by, rot] of [
+        [74, 94, -0.3],
+        [102, 86, 0.2],
+        [120, 104, -0.25],
+        [88, 114, 0.35],
+        [108, 114, -0.1],
+      ] as const) {
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(rot);
+        ctx.fillStyle = '#451a03';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 12, 8.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#a16207';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-7, 0);
+        ctx.quadraticCurveTo(0, -3, 7, 0);
+        ctx.stroke();
+        ctx.restore();
+      }
+      break;
+    }
+
+    case 'lumber': {
+      // Precision-milled stacked isometric timber planks
+      drawIsoBox(ctx, 96, 130, 52, 18, 14, '#fde68a', '#b45309', '#d97706');
+      drawIsoBox(ctx, 96, 112, 52, 18, 14, '#fef3c7', '#92400e', '#b45309');
+      drawIsoBox(ctx, 96, 94, 52, 18, 14, '#fde68a', '#b45309', '#f59e0b');
+      break;
+    }
+
+    case 'solar_panel': {
+      // Angled monocrystalline silicon photovoltaic array with silver aluminum frame
+      ctx.save();
+      ctx.translate(96, 98);
+      ctx.rotate(-0.18);
+      ctx.fillStyle = '#cbd5e1';
+      rr(ctx, -56, -34, 112, 68, 5);
+      ctx.fill();
+      const pvG = ctx.createLinearGradient(-50, -28, 50, 28);
+      pvG.addColorStop(0, '#1e3a8a');
+      pvG.addColorStop(0.5, '#0284c7');
+      pvG.addColorStop(1, '#0f172a');
+      ctx.fillStyle = pvG;
+      rr(ctx, -50, -28, 100, 56, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.45)';
+      ctx.lineWidth = 1.2;
+      for (let gx = -25; gx <= 25; gx += 25) {
+        ctx.beginPath();
+        ctx.moveTo(gx, -28);
+        ctx.lineTo(gx, 28);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(-50, 0);
+      ctx.lineTo(50, 0);
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
+
+    case 'roasted_coffee': {
+      // Matte espresso craft pouch + ceramic cup with crema & aroma curl
+      const bagG = ctx.createLinearGradient(50, 48, 114, 140);
+      bagG.addColorStop(0, '#78350f');
+      bagG.addColorStop(0.5, '#451a03');
+      bagG.addColorStop(1, '#1c0a00');
+      ctx.fillStyle = bagG;
+      rr(ctx, 50, 52, 62, 86, 8);
+      ctx.fill();
+      ctx.fillStyle = '#fbbf24';
+      rr(ctx, 58, 76, 46, 34, 4);
+      ctx.fill();
+      // Espresso cup foreground
+      ctx.fillStyle = '#f8fafc';
+      rr(ctx, 102, 102, 40, 32, 8);
+      ctx.fill();
+      ctx.fillStyle = '#92400e';
+      ctx.beginPath();
+      ctx.ellipse(122, 104, 17, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+
+    case 'furniture': {
+      // Mid-century executive desk & upholstered lounge armchair
+      const deskG = ctx.createLinearGradient(44, 72, 148, 110);
+      deskG.addColorStop(0, '#d97706');
+      deskG.addColorStop(1, '#78350f');
+      ctx.fillStyle = deskG;
+      rr(ctx, 44, 78, 104, 14, 4);
+      ctx.fill();
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(54, 92, 8, 44);
+      ctx.fillRect(130, 92, 8, 44);
+      // Upholstered cushion chair beside
+      ctx.fillStyle = '#0ea5e9';
+      rr(ctx, 76, 56, 40, 26, 8);
+      ctx.fill();
+      ctx.fillStyle = '#0369a1';
+      rr(ctx, 70, 96, 52, 22, 6);
+      ctx.fill();
+      break;
+    }
+
+    case 'ev_suv': {
+      // Tall athletic electric SUV silhouette with LED light bar & rugged wheel arches
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.16)';
+      ctx.beginPath();
+      ctx.ellipse(96, 134, 64, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+      const suvG = ctx.createLinearGradient(30, 62, 160, 120);
+      suvG.addColorStop(0, '#34d399');
+      suvG.addColorStop(0.55, '#059669');
+      suvG.addColorStop(1, '#064e3b');
+      ctx.fillStyle = suvG;
+      ctx.beginPath();
+      ctx.moveTo(30, 118);
+      ctx.lineTo(32, 92);
+      ctx.lineTo(60, 86);
+      ctx.lineTo(78, 62);
+      ctx.lineTo(142, 62);
+      ctx.lineTo(158, 92);
+      ctx.lineTo(160, 118);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(78, 68, 56, 20);
+      ctx.fillStyle = '#fef08a';
+      rr(ctx, 32, 95, 18, 5, 2);
+      ctx.fill();
+      for (const wx of [56, 134]) {
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(wx, 122, 16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#cbd5e1';
+        ctx.beginPath();
+        ctx.arc(wx, 122, 8.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+
+    case 'fintech_app': {
+      // Sleek floating contactless card & illuminated fintech ledger bars
+      const cardG = ctx.createLinearGradient(42, 56, 150, 132);
+      cardG.addColorStop(0, '#10b981');
+      cardG.addColorStop(0.5, '#0284c7');
+      cardG.addColorStop(1, '#1e1b4b');
+      ctx.fillStyle = cardG;
+      rr(ctx, 42, 56, 108, 72, 11);
+      ctx.fill();
+      ctx.strokeStyle = '#a7f3d0';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.fillStyle = '#fbbf24';
+      rr(ctx, 56, 74, 22, 16, 3);
+      ctx.fill();
+      ctx.fillStyle = '#f8fafc';
+      rr(ctx, 56, 104, 52, 6, 3);
+      ctx.fill();
+      break;
+    }
+
     case 'ai_enterprise':
     default: {
       // Luminous crystalline AI neural diamond prism with golden orbital halo

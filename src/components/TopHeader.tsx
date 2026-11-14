@@ -85,8 +85,12 @@ export function TopHeader({
                 <span className="font-mono tabular-nums text-slate-300 shrink-0">
                   {state.dateString}
                 </span>
-                <span className="hidden sm:inline" aria-hidden="true">·</span>
-                <span className={`hidden sm:inline font-medium shrink-0 ${cycleColor}`}>
+                <span aria-hidden="true">·</span>
+                <span className="text-sky-300 font-medium truncate">
+                  {state.city.name} ({(state.cityOrder || ['city_metro_1']).length}/10)
+                </span>
+                <span className="hidden md:inline" aria-hidden="true">·</span>
+                <span className={`hidden md:inline font-medium shrink-0 ${cycleColor}`}>
                   Makro: {cycleLabel} ({state.macro.gdpGrowthRate >= 0 ? '+' : ''}
                   {state.macro.gdpGrowthRate}%)
                 </span>

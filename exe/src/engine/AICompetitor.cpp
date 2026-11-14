@@ -757,8 +757,9 @@ SimulationState simulate_ai_competitors(const SimulationState& state) {
         slotCompanies[static_cast<size_t>(slot)] = current.companies.at(aiIds[idx]);
     }
 
-    // Parallelize independent read-only AI company turns across CPU cores when hardware concurrency allows
-    if (evalCount >= 2 && std::thread::hardware_concurrency() >= 2) {
+    // Parallelize independent read-only AI company turns across CPU cores only on heavy workloads
+    // to prevent OS thread-spawning latency from outweighing fast sub-millisecond AI turns.
+    if (evalCount >= 2 && current.facilities.size() >= 48 && std::thread::hardware_concurrency() >= 2) {
         std::vector<std::thread> workers;
         workers.reserve(static_cast<size_t>(evalCount - 1));
         for (int slot = 1; slot < evalCount; ++slot) {

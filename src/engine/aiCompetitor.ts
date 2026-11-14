@@ -24,6 +24,7 @@ import {
 import { recalculateCityTraffic } from './spatialGrid';
 import { clamp, deterministicHash, round2, roundCurrency } from './precisionMath';
 import { createCompanyAndStarterFromTemplate } from './saveSystem';
+import { PRIMARY_CITY_ID } from './governmentEngine';
 
 const GENERATED_ENTRANT_COLORS = [
   { color: '#0369a1', accent: '#38bdf8' },
@@ -352,6 +353,12 @@ export function processAICompanyTurn(
         nextPrice = Math.max(nextPrice, roundCurrency(prod.basePrice * 1.15));
       }
 
+      if (updatedComp.subsidiaryDirective?.priceStrategy === 'discount') {
+        nextPrice = Math.min(nextPrice, roundCurrency(prod.basePrice * 0.9));
+      } else if (updatedComp.subsidiaryDirective?.priceStrategy === 'premium') {
+        nextPrice = Math.max(nextPrice, roundCurrency(prod.basePrice * 1.18));
+      }
+
       if (nextPrice !== f.sellingPrice) {
         f.sellingPrice = nextPrice;
         changed = true;
@@ -382,7 +389,11 @@ export function processAICompanyTurn(
 
       if (neededIds.length > 0) {
         let ownBest: Facility | undefined;
+        let parentBest: Facility | undefined;
         let externalBest: Facility | undefined;
+        const allowParentSync =
+          Boolean(updatedComp.parentCompanyId) &&
+          (updatedComp.subsidiaryDirective?.allowSupplySync ?? true);
 
         for (let k = 0; k < neededIds.length; k++) {
           const candidates = ctx.suppliersByProduct.get(neededIds[k]);
@@ -392,6 +403,8 @@ export function processAICompanyTurn(
             if (sf.id === f.id) continue;
             if (sf.companyId === aiCompany.id) {
               if (!ownBest || sf.qualityRating > ownBest.qualityRating) ownBest = sf;
+            } else if (allowParentSync && sf.companyId === updatedComp.parentCompanyId) {
+              if (!parentBest || sf.qualityRating > parentBest.qualityRating) parentBest = sf;
             } else {
               if (!externalBest || sf.qualityRating > externalBest.qualityRating) {
                 externalBest = sf;
@@ -400,11 +413,15 @@ export function processAICompanyTurn(
           }
         }
 
-        const chosenSupplier = ownBest || externalBest;
+        const chosenSupplier = ownBest || parentBest || externalBest;
         if (chosenSupplier && purchasingUnit.supplierFacilityId !== chosenSupplier.id) {
           purchasingUnit.supplierFacilityId = chosenSupplier.id;
           f.supplySourceLabel =
-            chosenSupplier.companyId === aiCompany.id ? 'Pabrik Internal' : 'Grosir B2B';
+            chosenSupplier.companyId === aiCompany.id
+              ? 'Pabrik Internal'
+              : chosenSupplier.companyId === updatedComp.parentCompanyId
+              ? 'Sinergi Induk'
+              : 'Grosir B2B';
           changed = true;
         }
       }
@@ -448,7 +465,13 @@ export function processAICompanyTurn(
     }
   }
 
-  const CASH_SAFETY_BUFFER = state.macro.cyclePhase === 'recession' ? 4500000 : 3000000;
+  const expansionMode = updatedComp.subsidiaryDirective?.expansionMode || 'balanced';
+  const CASH_SAFETY_BUFFER =
+    expansionMode === 'aggressive'
+      ? 1800000
+      : state.macro.cyclePhase === 'recession'
+      ? 4500000
+      : 3000000;
 
   // 4. Smart Existing Facility Capacity Upgrade / 3x3 Slot Installation
   if (updatedComp.lastMonthNetProfit > 30000 && updatedComp.cash > CASH_SAFETY_BUFFER + 600000) {
@@ -501,11 +524,12 @@ export function processAICompanyTurn(
   }
 
   // 5. Anti-Cheat & Macro-Aware New Facility Construction Gates
-  const maxAllowed = getMaxAllowedFacilities(state.currentTick);
+  const maxAllowed = getMaxAllowedFacilities(state.currentTick) + (expansionMode === 'aggressive' ? 2 : 0);
   const lastBuilt = updatedComp.lastConstructedTick ?? -99;
   const canConstructNew =
+    expansionMode !== 'cash_cow' &&
     aiFacilities.length < maxAllowed &&
-    state.currentTick - lastBuilt >= 8 &&
+    state.currentTick - lastBuilt >= (expansionMode === 'aggressive' ? 4 : 8) &&
     updatedComp.lastMonthNetProfit >= 15000;
 
   if (canConstructNew) {
@@ -706,9 +730,11 @@ export function processAICompanyTurn(
           const isRealEstate =
             facilityToBuild === 'apartment_complex' || facilityToBuild === 'commercial_tower';
 
+          const activeCityId = state.activeCityId || PRIMARY_CITY_ID;
           const newFacility: Facility = {
             id: facilityId,
             companyId: aiCompany.id,
+            cityId: activeCityId,
             name: `${spec.name} ${aiCompany.ticker}`,
             type: facilityToBuild,
             tileX: parcel.x,
@@ -749,7 +775,9 @@ export function processAICompanyTurn(
                 ? { ...p, facilityId, ownerCompanyId: aiCompany.id }
                 : p
             ),
-            { ...state.facilities, [facilityId]: newFacility }
+            { ...state.facilities, [facilityId]: newFacility },
+            1.0,
+            activeCityId
           );
 
           let newsEvent = '';

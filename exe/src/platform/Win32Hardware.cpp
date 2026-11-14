@@ -135,12 +135,14 @@ bool Win32Hardware::initialize(HINSTANCE hInstance, const WindowConfig& config) 
     RECT rc{0, 0, config.initialWidth, config.initialHeight};
     AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
-    int screenW = GetSystemMetrics(SM_CXSCREEN);
-    int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int winW = rc.right - rc.left;
-    int winH = rc.bottom - rc.top;
-    int posX = std::max(0, (screenW - winW) / 2);
-    int posY = std::max(0, (screenH - winH) / 2);
+    RECT workArea{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+    const int workW = std::max(640, static_cast<int>(workArea.right - workArea.left));
+    const int workH = std::max(480, static_cast<int>(workArea.bottom - workArea.top));
+    const int winW = std::min(static_cast<int>(rc.right - rc.left), workW);
+    const int winH = std::min(static_cast<int>(rc.bottom - rc.top), workH);
+    const int posX = static_cast<int>(workArea.left) + std::max(0, (workW - winW) / 2);
+    const int posY = static_cast<int>(workArea.top) + std::max(0, (workH - winH) / 2);
 
     hwnd_ = CreateWindowExW(
         0,

@@ -3,6 +3,7 @@ import { GOVT_OWNER_ID, RESIDENT_OWNER_ID, PRODUCTS } from './productsData';
 import { clamp, finiteOr, round2, round4, roundCurrency } from './precisionMath';
 import { getDepositYieldBonus } from './housingEcosystem';
 import { getParcelAt } from './spatialGrid';
+import { PRIMARY_CITY_ID } from './governmentEngine';
 
 export interface ExecBuffs {
   hasCOO: boolean;
@@ -172,10 +173,13 @@ export function runPrimaryAndNonFactoryStage(
   const storesByProduct = new Map<ProductId, Facility[]>();
 
   const allOrigFacilities = Object.values(state.facilities);
+  const activeCityId = state.activeCityId || PRIMARY_CITY_ID;
 
   for (let i = 0; i < allOrigFacilities.length; i++) {
     const fac = allOrigFacilities[i];
     const f: Facility = { ...fac, units: fac.units.map(u => ({ ...u })) };
+    const facCityId = f.cityId || activeCityId;
+    const facCity = (state.cities && state.cities[facCityId]) || state.city;
 
     // Government-owned civic apartments & citizen-owned resident houses (outside Bursa corporations)
     if (
@@ -184,7 +188,7 @@ export function runPrimaryAndNonFactoryStage(
       f.type === 'civic_housing' ||
       f.type === 'resident_house'
     ) {
-      const tileTraffic = getTileTraffic(f.tileX, f.tileY);
+      const tileTraffic = facCityId === activeCityId ? getTileTraffic(f.tileX, f.tileY) : 45;
       if (f.type === 'resident_house' || f.companyId === RESIDENT_OWNER_ID) {
         const tier = (f.housingTier || f.level || 1) as 1 | 2 | 3;
         const families = f.residentFamilies || tier * 8;
@@ -206,7 +210,7 @@ export function runPrimaryAndNonFactoryStage(
       if (cap <= 0) cap = 320;
       const occupancy = Math.min(
         0.98,
-        0.74 + (state.city.consumerConfidence / 100) * 0.14 + (tileTraffic / 100) * 0.08
+        0.74 + (facCity.consumerConfidence / 100) * 0.14 + (tileTraffic / 100) * 0.08
       );
       f.lastMonthUnitsSold = roundCurrency(cap * occupancy);
       f.monthlyProduction = f.lastMonthUnitsSold;
@@ -235,7 +239,7 @@ export function runPrimaryAndNonFactoryStage(
 
     // Private Real Estate: Residential Apartment Complex & Commercial Office Tower
     if (f.type === 'apartment_complex' || f.type === 'commercial_tower') {
-      const tileTraffic = getTileTraffic(f.tileX, f.tileY);
+      const tileTraffic = facCityId === activeCityId ? getTileTraffic(f.tileX, f.tileY) : 52;
       let adUnits = 0;
       let unitCap = 0;
       for (let u = 0; u < f.units.length; u++) {
@@ -262,7 +266,7 @@ export function runPrimaryAndNonFactoryStage(
       if (f.type === 'apartment_complex') {
         occupancy = clamp(
           0.6 +
-            (state.city.consumerConfidence / 100) * 0.18 +
+            (facCity.consumerConfidence / 100) * 0.18 +
             (tileTraffic / 100) * 0.16 +
             (f.brandRating / 100) * 0.08,
           0.55,
@@ -305,13 +309,14 @@ export function runPrimaryAndNonFactoryStage(
     // R&D Centers
     if (f.type === 'rd_center') {
       let unitCostSum = 0;
+      const rdSubsidyMult = 1 + (state.government?.rdSubsidyRate || 0);
       for (let u = 0; u < f.units.length; u++) {
         const rdUnit = f.units[u];
         if (rdUnit.type !== 'rd') continue;
         const prod = rdUnit.targetProductId || comp.activeResearchProduct || 'smartphone';
         const currentTech = comp.techLevels[prod] || 25;
         if (currentTech < 100 && comp.cash >= rdUnit.monthlyCost) {
-          const speedMult = buffs.hasCTO ? 1.45 : 1.0;
+          const speedMult = (buffs.hasCTO ? 1.45 : 1.0) * rdSubsidyMult;
           const techGain = Math.max(1, roundCurrency(2 * rdUnit.level * f.level * speedMult));
           comp.techLevels[prod] = Math.min(100, currentTech + techGain);
           unitCostSum += rdUnit.monthlyCost;
@@ -329,8 +334,8 @@ export function runPrimaryAndNonFactoryStage(
 
     // Media & Telecom Station
     if (f.type === 'media_telecom') {
-      const viewers = roundCurrency(state.city.population * 0.14 * (0.7 + f.level * 0.2));
-      const adRev = roundCurrency(viewers * 0.55 * (state.city.consumerConfidence / 80));
+      const viewers = roundCurrency(facCity.population * 0.14 * (0.7 + f.level * 0.2));
+      const adRev = roundCurrency(viewers * 0.55 * (facCity.consumerConfidence / 80));
       f.monthlyProduction = viewers;
       f.monthlySales = viewers;
       f.lastMonthUnitsSold = viewers;
@@ -367,7 +372,7 @@ export function runPrimaryAndNonFactoryStage(
       if (totalCap <= 0) totalCap = 4500;
       const effPrice = f.sellingPrice > 0 ? f.sellingPrice : prodRecipe.basePrice;
       const demand = calcDemand(
-        roundCurrency(state.city.population * 0.015 * prodRecipe.demandFactor * 10),
+        roundCurrency(facCity.population * 0.015 * prodRecipe.demandFactor * 10),
         effPrice,
         prodRecipe.basePrice,
         f.qualityRating,
@@ -421,7 +426,8 @@ export function runPrimaryAndNonFactoryStage(
         }
       }
 
-      const parcelHere = getParcelAt(state.mapParcels, f.tileX, f.tileY);
+      const cityParcels = facCity.mapParcels || state.mapParcels;
+      const parcelHere = getParcelAt(cityParcels, f.tileX, f.tileY);
       const depositBonus = getDepositYieldBonus(f.type, parcelHere?.resourceDeposit);
       f.depositBonusPct = depositBonus;
 
@@ -441,7 +447,7 @@ export function runPrimaryAndNonFactoryStage(
 
       const gridPowerRev =
         f.type === 'power_plant_green'
-          ? roundCurrency(state.city.population * 0.032 * (0.85 + f.level * 0.22))
+          ? roundCurrency(facCity.population * 0.032 * (0.85 + f.level * 0.22))
           : 0;
 
       producerMeta[f.id] = {

@@ -44,7 +44,7 @@ if %ERRORLEVEL% EQU 0 (
     if %ERRORLEVEL% NEQ 0 goto :error
 
     echo [2/3] Compiling and Running Native Parity Tests...
-    cl.exe /nologo /std:c++23 /O2 /Oi /Ot /utf-8 /EHsc ^
+    cl.exe /nologo /MP /std:c++23 /O2 /Oi /Ot /utf-8 /EHsc ^
       /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 ^
       /Isrc /Febuild_cl\CapLab13Tests.exe ^
       tests\NativeParityTests.cpp ^
@@ -63,7 +63,7 @@ if %ERRORLEVEL% EQU 0 (
     if %ERRORLEVEL% NEQ 0 goto :agent_fallback
 
     echo [3/3] Compiling CapLab13Native.exe with LTCG...
-    cl.exe /nologo /std:c++23 /O2 /Oi /Ot /GL /utf-8 /EHsc ^
+    cl.exe /nologo /MP /std:c++23 /O2 /Oi /Ot /GL /utf-8 /EHsc ^
       /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 ^
       /Isrc /Fedist\CapLab13Native.exe ^
       src\main.cpp ^
@@ -85,7 +85,7 @@ if %ERRORLEVEL% EQU 0 (
       build_cl\resource.res ^
       /link /LTCG /MANIFEST:NO /SUBSYSTEM:WINDOWS ^
       user32.lib gdi32.lib d3d11.lib dxgi.lib d2d1.lib dwrite.lib dwmapi.lib ^
-      shcore.lib shell32.lib ole32.lib comdlg32.lib winmm.lib avrt.lib
+      shcore.lib shell32.lib ole32.lib comdlg32.lib winmm.lib avrt.lib uuid.lib dxguid.lib
     if %ERRORLEVEL% NEQ 0 goto :agent_fallback
 
     echo.

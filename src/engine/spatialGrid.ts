@@ -86,7 +86,8 @@ export function getTrafficDemandMultiplier(trafficIndex: number): number {
 export function recalculateCityTraffic(
   parcels: MapParcel[],
   facilities: Record<string, Facility>,
-  inflationStepFactor = 1.0
+  inflationStepFactor = 1.0,
+  cityIdFilter?: string
 ): MapParcel[] {
   const len = parcels.length;
   if (len === 0) return parcels;
@@ -142,6 +143,9 @@ export function recalculateCityTraffic(
   const facList = Object.values(facilities);
   for (let fIdx = 0; fIdx < facList.length; fIdx++) {
     const fac = facList[fIdx];
+    if (cityIdFilter && (fac.cityId || 'city_metro_1') !== cityIdFilter) {
+      continue;
+    }
     let peak = 0;
     let radius = 0;
 

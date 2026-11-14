@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { SimulationState } from '../types/game';
+import React, { useState, useMemo } from 'react';
+import { AiEntityRole, ExecutiveRole, SimulationState } from '../types/game';
 import {
   executeStockTrade,
   handleCorporateLoan,
@@ -7,6 +7,8 @@ import {
   issueNewShares,
   executeSubsidiaryMerger,
 } from '../engine/stockMarket';
+import { getCompanyCapTable, launchCompanyIPO } from '../engine/subsidiaryEngine';
+import { recruitInvestorAsExecutive } from '../engine/investorEngine';
 import { formatMoney } from '../engine/precisionMath';
 import {
   TrendingUp,
@@ -17,6 +19,9 @@ import {
   AlertCircle,
   GitMerge,
   PlusCircle,
+  Users,
+  Briefcase,
+  Crown,
 } from 'lucide-react';
 import { CEOIcon } from './IconHelper';
 
@@ -34,7 +39,8 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
   const [tradeShares, setTradeShares] = useState<number>(5000);
   const [issueCount, setIssueCount] = useState<number>(50000);
   const [loanAmount, setLoanAmount] = useState<number>(500000);
-  const [activeTab, setActiveTab] = useState<'stocks' | 'banking'>('stocks');
+  const [activeTab, setActiveTab] = useState<'stocks' | 'entities' | 'banking'>('stocks');
+  const [entityRoleFilter, setEntityRoleFilter] = useState<'all' | 'investor' | 'ceo' | 'c_suite' | 'gov'>('all');
   const [feedbackMsg, setFeedbackMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [confirmMerger, setConfirmMerger] = useState(false);
 
@@ -45,6 +51,51 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
   const ownershipPct = targetCompany
     ? getOwnershipPercentage(targetCompany, playerHeldShares)
     : 0;
+
+  const capTable = useMemo(
+    () => (targetCompany ? getCompanyCapTable(state, targetCompany.id).slice(0, 6) : []),
+    [state, targetCompany]
+  );
+
+  const allEntities = useMemo(() => {
+    const order = state.aiEntityOrder || [];
+    const map = state.aiEntities || {};
+    return order.map(id => map[id]).filter(Boolean);
+  }, [state.aiEntities, state.aiEntityOrder]);
+
+  const filteredEntities = useMemo(() => {
+    return allEntities
+      .filter(e => {
+        if (entityRoleFilter === 'all') return true;
+        if (entityRoleFilter === 'gov') {
+          return e.role === 'mayor' || e.role === 'minister_of_labor' || e.role === 'president';
+        }
+        return e.role === entityRoleFilter;
+      })
+      .sort((a, b) => b.netWorth - a.netWorth);
+  }, [allEntities, entityRoleFilter]);
+
+  const handleRecruitEntity = (entityId: string, role: ExecutiveRole) => {
+    setFeedbackMsg(null);
+    const res = recruitInvestorAsExecutive(state, entityId, state.playerCompanyId, role);
+    if (res.success && res.updatedState) {
+      onStateUpdate(res.updatedState);
+      setFeedbackMsg({ text: res.message });
+    } else {
+      setFeedbackMsg({ text: res.message, error: true });
+    }
+  };
+
+  const handleLaunchIPO = () => {
+    setFeedbackMsg(null);
+    const res = launchCompanyIPO(state, state.playerCompanyId, 0.2);
+    if (res.success && res.updatedState) {
+      onStateUpdate(res.updatedState);
+      setFeedbackMsg({ text: res.message });
+    } else {
+      setFeedbackMsg({ text: res.message, error: true });
+    }
+  };
 
   const handleTrade = (isBuy: boolean) => {
     if (!targetCompany) return;
@@ -158,30 +209,42 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
   return (
     <div className="p-4 pb-24 md:pb-6 max-w-7xl mx-auto space-y-4 text-xs select-none">
       {/* Sub-Tabs */}
-      <div className="grid grid-cols-2 bg-[#11192c] p-1 rounded-xl border border-slate-800/80">
+      <div className="grid grid-cols-3 bg-[#11192c] p-1 rounded-xl border border-slate-800/80 gap-1">
         <button
           type="button"
           onClick={() => setActiveTab('stocks')}
-          className={`min-h-[42px] rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors ${
+          className={`min-h-[42px] px-2 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors ${
             activeTab === 'stocks'
               ? 'bg-sky-600 text-white'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <TrendingUp className="w-4 h-4" />
-          <span>Bursa Saham &amp; M&amp;A</span>
+          <TrendingUp className="w-4 h-4 shrink-0" />
+          <span className="truncate">Bursa &amp; M&amp;A</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('entities')}
+          className={`min-h-[42px] px-2 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors ${
+            activeTab === 'entities'
+              ? 'bg-sky-600 text-white'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Users className="w-4 h-4 shrink-0" />
+          <span className="truncate">{allEntities.length || 100} Entitas AI</span>
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('banking')}
-          className={`min-h-[42px] rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors ${
+          className={`min-h-[42px] px-2 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors ${
             activeTab === 'banking'
               ? 'bg-sky-600 text-white'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Landmark className="w-4 h-4" />
-          <span>Perbankan &amp; Emisi Saham</span>
+          <Landmark className="w-4 h-4 shrink-0" />
+          <span className="truncate">Bank &amp; IPO</span>
         </button>
       </div>
 
@@ -204,11 +267,11 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
 
       {activeTab === 'stocks' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-          {/* Left Panel: 10-Company Emiten Selector */}
+          {/* Left Panel: Active Corporations Selector */}
           <div className="lg:col-span-5 bg-[#11192c] border border-slate-800/80 rounded-2xl p-3 space-y-2.5">
             <div className="flex items-center justify-between px-1">
               <h2 className="font-bold text-xs text-slate-200">
-                Bursa Efek ({companyIds.length}/10 Emiten Aktif)
+                Bursa Efek ({companyIds.length} Emiten Aktif)
               </h2>
               <span className="text-[10px] font-mono text-slate-400">Pilih emiten</span>
             </div>
@@ -380,6 +443,42 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
               {/* Custom Native SVG Stock Chart */}
               {renderPriceSvgChart(targetCompany.sharePriceHistory)}
 
+              {/* Cap Table & 7-Seat Board of Directors */}
+              {capTable.length > 0 && (
+                <div className="bg-[#0d1526] border border-slate-800/80 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                      <Crown className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Struktur Pemegang Saham &amp; Direksi (7 Kursi)</span>
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-400">Cap Table</span>
+                  </div>
+                  <div className="space-y-1 font-mono tabular-nums text-[10px]">
+                    {capTable.map(row => (
+                      <div
+                        key={row.holderId}
+                        className="flex items-center justify-between py-1 border-b border-slate-800/60 last:border-b-0"
+                      >
+                        <div className="min-w-0 flex items-center gap-1.5 font-sans">
+                          <span className="font-semibold text-slate-200 truncate max-w-[140px]">
+                            {row.name}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-mono">
+                            {row.tickerOrRole}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={row.isControlling ? 'text-emerald-400 font-bold' : 'text-sky-400'}>
+                            {row.pct}%
+                          </span>
+                          <span className="text-amber-300">[{row.boardSeats}/7]</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Trade Execution */}
               <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
                 <div className="flex items-center justify-between">
@@ -475,6 +574,126 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'entities' && (
+        <div className="space-y-3">
+          <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div>
+              <h2 className="font-bold text-sm text-white flex items-center gap-2">
+                <Users className="w-4 h-4 text-sky-400" />
+                <span>Direktori {allEntities.length} Tokoh Ekonomi, Investor &amp; Pejabat</span>
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Investor memperdagangkan saham secara otonom, mengambil alih kursi CEO mayoritas, atau naik menjadi pejabat pemerintahan.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5 font-mono tabular-nums text-[10px] shrink-0">
+              {(
+                [
+                  { id: 'all', label: `Semua (${allEntities.length})` },
+                  { id: 'investor', label: `Investor (${allEntities.filter(e => e.role === 'investor').length})` },
+                  { id: 'ceo', label: `CEO (${allEntities.filter(e => e.role === 'ceo').length})` },
+                  { id: 'c_suite', label: `C-Suite (${allEntities.filter(e => e.role === 'c_suite').length})` },
+                  {
+                    id: 'gov',
+                    label: `Pemerintah (${allEntities.filter(e => e.role === 'mayor' || e.role === 'minister_of_labor' || e.role === 'president').length})`,
+                  },
+                ] as const
+              ).map(f => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setEntityRoleFilter(f.id)}
+                  className={`min-h-[30px] px-2.5 rounded-lg border font-semibold transition-colors ${
+                    entityRoleFilter === f.id
+                      ? 'bg-sky-600 border-sky-400 text-white'
+                      : 'bg-[#0d1526] border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {filteredEntities.slice(0, 48).map(ent => {
+              const roleMap: Record<AiEntityRole, { label: string; cls: string }> = {
+                investor: { label: 'INVESTOR', cls: 'bg-sky-950/70 border-sky-700/70 text-sky-300' },
+                ceo: { label: 'CEO', cls: 'bg-amber-950/70 border-amber-700/70 text-amber-300' },
+                c_suite: { label: `C-SUITE ${ent.executiveRole || ''}`, cls: 'bg-emerald-950/70 border-emerald-700/70 text-emerald-300' },
+                mayor: { label: 'WALI KOTA', cls: 'bg-teal-950/70 border-teal-700/70 text-teal-300' },
+                minister_of_labor: { label: 'MENAKER', cls: 'bg-indigo-950/70 border-indigo-700/70 text-indigo-300' },
+                president: { label: 'PRESIDEN', cls: 'bg-rose-950/70 border-rose-700/70 text-rose-300' },
+              };
+              const badge = roleMap[ent.role];
+              const affiliatedComp = ent.companyId ? state.companies[ent.companyId] : null;
+              const portfolioCount = Object.keys(ent.portfolio).length;
+
+              return (
+                <div
+                  key={ent.id}
+                  className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-3 flex flex-col justify-between gap-2.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className="w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-xs text-white shrink-0"
+                        style={{ backgroundColor: ent.color }}
+                      >
+                        {ent.initials}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-xs text-white truncate">{ent.name}</div>
+                        <div className="text-[10px] text-slate-400 truncate">
+                          {affiliatedComp
+                            ? `${affiliatedComp.ticker} · ${affiliatedComp.name}`
+                            : `Spesialis ${ent.specialty.toUpperCase()} · ${portfolioCount} Emiten`}
+                        </div>
+                      </div>
+                    </div>
+                    <span className={`px-1.5 py-0.5 rounded border text-[9px] font-mono font-bold shrink-0 ${badge.cls}`}>
+                      {badge.label}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-1.5 bg-[#0d1526] p-2 rounded-xl border border-slate-800/70 font-mono tabular-nums text-[10px]">
+                    <div>
+                      <span className="text-slate-500 block">Kekayaan</span>
+                      <span className="text-emerald-400 font-bold">{formatMoney(ent.netWorth)}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Fin/Ops</span>
+                      <span className="text-slate-200 font-bold">{ent.financeSkill}/{ent.opsSkill}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-slate-500 block">Pol/R&amp;D</span>
+                      <span className="text-amber-300 font-bold">{ent.politicalClout}/{ent.rdSkill}</span>
+                    </div>
+                  </div>
+
+                  {ent.role === 'investor' && (
+                    <div className="flex items-center gap-1 pt-0.5">
+                      {(['COO', 'CTO', 'CMO', 'CFO'] as ExecutiveRole[]).map(execRole => (
+                        <button
+                          key={execRole}
+                          type="button"
+                          onClick={() => handleRecruitEntity(ent.id, execRole)}
+                          className="flex-1 min-h-[30px] rounded-lg bg-slate-800 hover:bg-sky-600 text-slate-200 hover:text-white text-[10px] font-mono font-bold flex items-center justify-center gap-0.5 transition-colors"
+                          title={`Rekrut ${ent.name} sebagai ${execRole}`}
+                        >
+                          <Briefcase className="w-2.5 h-2.5" />
+                          <span>{execRole}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -614,6 +833,14 @@ export function StockMarketView({ state, onStateUpdate }: StockMarketViewProps) 
                 className="w-full min-h-[46px] rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold transition-colors"
               >
                 Terbitkan Saham Baru (Tanpa Bunga)
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLaunchIPO}
+                className="w-full min-h-[42px] rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold transition-colors"
+              >
+                Penawaran Perdana / Secondary IPO (+20% Saham Publik)
               </button>
             </div>
 

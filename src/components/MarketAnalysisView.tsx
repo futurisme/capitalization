@@ -32,15 +32,15 @@ export function MarketAnalysisView({ state }: MarketAnalysisViewProps) {
   return (
     <div className="p-4 pb-24 md:pb-6 max-w-7xl mx-auto space-y-4 text-xs">
       {/* Macro & City Economic Pulse Summary */}
-      <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4">
+      <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <h2 className="font-bold text-sm text-white flex items-center gap-2">
               <BarChart3 className="w-4 h-4 text-sky-400" />
-              <span>Analisis Pasar &amp; Panduan Produk Kota</span>
+              <span>Analisis Pasar &amp; Panduan {Object.keys(PRODUCTS).length} Produk Kota</span>
             </h2>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              {state.city.name} · {cycleLabel}
+              {state.city.name} ({(state.cityOrder || ['city_metro_1']).length}/10 Kota) · {cycleLabel}
             </p>
           </div>
 
@@ -54,6 +54,28 @@ export function MarketAnalysisView({ state }: MarketAnalysisViewProps) {
             </span>
           </div>
         </div>
+
+        {state.cities && (state.cityOrder || []).length > 1 && (
+          <div className="flex flex-wrap gap-1.5 pt-2 border-t border-slate-800/80 font-mono tabular-nums text-[10px]">
+            {(state.cityOrder || []).map(cId => {
+              const cityObj = state.cities?.[cId];
+              if (!cityObj) return null;
+              const isAct = cId === (state.activeCityId || 'city_metro_1');
+              return (
+                <div
+                  key={cId}
+                  className={`px-2 py-1 rounded-lg border ${
+                    isAct
+                      ? 'bg-sky-950/60 border-sky-500/70 text-sky-200 font-bold'
+                      : 'bg-[#0d1526] border-slate-800 text-slate-400'
+                  }`}
+                >
+                  {cityObj.name} · {(cityObj.population / 1_000_000).toFixed(2)}M
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Category Segmented Filter */}

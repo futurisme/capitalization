@@ -1,4 +1,4 @@
-import { SimulationState } from '../types/game';
+import { CityMarket, SimulationState } from '../types/game';
 import {
   buildTrafficLookupGrid,
   getTrafficDemandMultiplier,
@@ -31,6 +31,8 @@ import {
   buyVacantLandParcel,
   sellOwnedLandParcel,
 } from './housingEcosystem';
+import { PRIMARY_CITY_ID, simulateGovernmentMonth } from './governmentEngine';
+import { simulateInvestorsAndCareersMonth } from './investorEngine';
 
 // Re-export modular engine APIs to preserve single-import compatibility
 export {
@@ -52,18 +54,21 @@ export {
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'] as const;
 
 /**
- * Runs one full Capitalism Lab 13 economic month with reconciled P&L & multi-tier supply chain flow:
+ * Runs one full Capitalism Lab 13 economic month with reconciled P&L, multi-city simulation,
+ * 100-entity autonomous investors & career progression, and government elections/cabinet policy:
  * 1. Macro & Executive buffs (O(C))
- * 2. Primary Extraction & Non-Producer operations (Civic, Resident Housing, Real Estate, R&D, Media, Software, Logistics)
- * 3. Secondary Manufacturing (Processing -> Assembly) with upstream input dispatch & B2B/internal credit
- * 4. Retail Market Competition & Capacity-Capped Linked Supply Chain Transfers
- * 5. Surplus wholesale clearance + Reconciled Dividends, Corporate P&L & Deterministic Valuation
- * 6. Automated Resident Housing growth/upgrades, Natural Resource discovery & Labor/CPI indices
+ * 2. Primary Extraction & Non-Producer operations
+ * 3. Secondary Manufacturing (Processing -> Assembly)
+ * 4. Multi-City Retail Market Competition & Linked Supply Transfers
+ * 5. Surplus clearance + Reconciled Dividends, Corporate P&L & Deterministic Valuation
+ * 6. Automated Resident Housing, Natural Resource discovery & Labor/CPI indices
+ * 7. National & Municipal Government + 100 AI Entities Investor/CEO/Political Cycle
  */
 export function simulateEconomicMonth(state: SimulationState): SimulationState {
   const nextMonth = state.currentTick + 1;
   const year = 2026 + Math.floor(nextMonth / 12);
   const monthStr = `${MONTH_NAMES[nextMonth % 12]} ${year}`;
+  const activeId = state.activeCityId || PRIMARY_CITY_ID;
 
   const updatedMacro = advanceMacroEconomy(state.macro, nextMonth);
   const { updatedCompanies, execBuffs, companyIds } = prepareCompaniesAndExecBuffs(
@@ -102,6 +107,7 @@ export function simulateEconomicMonth(state: SimulationState): SimulationState {
     producerMeta
   );
 
+  const updatedCities: Record<string, CityMarket> = {};
   const updatedCity = runRetailCompetitionStage(
     state,
     updatedMacro,
@@ -111,7 +117,8 @@ export function simulateEconomicMonth(state: SimulationState): SimulationState {
     producerMeta,
     storesByProduct,
     getTileTraffic,
-    calculateConsumerDemand
+    calculateConsumerDemand,
+    updatedCities
   );
 
   finalizeUpstreamSurplusStage(
@@ -134,8 +141,16 @@ export function simulateEconomicMonth(state: SimulationState): SimulationState {
   const updatedParcels = recalculateCityTraffic(
     state.mapParcels,
     updatedFacilities,
-    inflationStepFactor
+    inflationStepFactor,
+    activeId
   );
+
+  if (updatedCities[activeId]) {
+    updatedCities[activeId] = {
+      ...updatedCities[activeId],
+      mapParcels: updatedParcels,
+    };
+  }
 
   const baseNextState: SimulationState = {
     ...state,
@@ -144,9 +159,14 @@ export function simulateEconomicMonth(state: SimulationState): SimulationState {
     companies: updatedCompanies,
     facilities: updatedFacilities,
     city: updatedCity,
+    cities: Object.keys(updatedCities).length > 0 ? updatedCities : state.cities,
+    activeCityId: activeId,
     macro: updatedMacro,
     mapParcels: updatedParcels,
   };
 
-  return simulateAutomatedHousingAndResources(baseNextState);
+  const afterHousing = simulateAutomatedHousingAndResources(baseNextState);
+  const afterGov = simulateGovernmentMonth(afterHousing);
+  return simulateInvestorsAndCareersMonth(afterGov);
 }
+

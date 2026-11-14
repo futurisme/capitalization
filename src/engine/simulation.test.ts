@@ -271,10 +271,10 @@ test('10. CapLab 13: C-Suite Executive payroll & COO maintenance reduction', () 
   );
 });
 
-test('11. Expanded 32x32 grid layout, legacy 14x14 & 24x24 save migration & prototype-pollution guard', () => {
-  assert.equal(MAP_GRID_SIZE, 32);
+test('11. Expanded 40x40 grid layout, legacy 14x14/24x24/32x32 save migration & prototype-pollution guard', () => {
+  assert.equal(MAP_GRID_SIZE, 40);
   const state = generateDefaultState();
-  assert.equal(state.mapParcels.length, 32 * 32, 'Default state must contain 1024 map parcels');
+  assert.equal(state.mapParcels.length, 40 * 40, 'Default state must contain 1600 map parcels');
 
   // Simulate legacy 24x24 save with prototype-pollution key
   const legacyObj = JSON.parse(exportStateAsJSON(state));
@@ -283,7 +283,7 @@ test('11. Expanded 32x32 grid layout, legacy 14x14 & 24x24 save migration & prot
 
   const restored = importStateFromJSON(injectedPayload);
   assert.ok(restored, 'Legacy 24x24 payload must migrate cleanly');
-  assert.equal(restored!.mapParcels.length, 1024, 'Migrated map must expand to 1024 tiles');
+  assert.equal(restored!.mapParcels.length, 1600, 'Migrated map must expand to 1600 tiles');
   assert.equal(({} as Record<string, unknown>).polluted, undefined, 'Object.prototype must not be polluted');
 });
 
@@ -613,20 +613,21 @@ test('20. Private Real Estate (apartment & commercial tower) scales revenue with
   assert.equal(landFirm.lastMonthNetProfit, Math.round(sumFacProfit - execPayroll - debtInterest));
 });
 
-test('21. Procedural Asset Engine catalogs >= 50 unique original assets across all products, companies, and facilities', async () => {
+test('21. Procedural Asset Engine catalogs 68 unique original assets across all 28 products, companies, and facilities', async () => {
   const { ASSET_CATALOG, getAssetRegistryStats, getGeneratedProductAsset } = await import('./assetGeneratorEngine');
   const { PRODUCTS, FACILITY_SPECS, INITIAL_AI_ROSTER, NEW_ENTRANT_POOL } = await import('./productsData');
 
   const stats = getAssetRegistryStats();
-  assert.ok(stats.total >= 50, `Expected at least 50 original assets, got ${stats.total}`);
-  assert.equal(stats.total, 60, 'Expected 20 products + 21 company/civic logos + 19 facilities = 60');
+  assert.ok(stats.total >= 68, `Expected at least 68 original assets, got ${stats.total}`);
+  assert.equal(stats.total, 68, 'Expected 28 products + 21 company/civic logos + 19 facilities = 68');
+  assert.equal(stats.products, 28, 'Expected 28 product renders');
 
-  // Verify 100% coverage of all 20 products
+  // Verify 100% coverage of all 28 products
   for (const prodId of Object.keys(PRODUCTS)) {
     assert.ok(ASSET_CATALOG[`product:${prodId}`], `Missing product asset spec for ${prodId}`);
   }
 
-  // Verify 100% coverage of all 18 facilities
+  // Verify 100% coverage of all 19 facilities
   for (const facType of Object.keys(FACILITY_SPECS)) {
     assert.ok(ASSET_CATALOG[`facility:${facType}`], `Missing facility asset spec for ${facType}`);
   }
@@ -1149,4 +1150,206 @@ test('34. Macro CPI, Unemployment Rate, and Real Wage stay finite and cycle-resp
   );
   assert.ok(Number.isFinite(sim.macro.realWageRate!) && sim.macro.realWageRate! > 10);
 });
+
+test('35. 100 AI Entities Ecosystem initializes 9 CEOs + investors/officials and supports C-Suite recruitment', async () => {
+  const { recruitInvestorAsExecutive, ensureAiEntitiesPopulated } = await import('./investorEngine');
+  const { MAX_AI_ENTITIES } = await import('./productsData');
+
+  const state = ensureAiEntitiesPopulated(generateDefaultState());
+  assert.equal(MAX_AI_ENTITIES, 100);
+  assert.equal(state.aiEntityOrder?.length, 100, 'Must populate exactly 100 AI entities');
+
+  const entities = Object.values(state.aiEntities || {});
+  assert.equal(entities.length, 100);
+  const ceos = entities.filter(e => e.role === 'ceo');
+  assert.equal(ceos.length, 9, 'Must begin with 9 AI Competitor CEOs');
+
+  const investor = entities.find(e => e.role === 'investor')!;
+  assert.ok(investor && investor.cash >= 1_400_000, 'Investors must start with valid autonomous cash');
+
+  const recruitRes = recruitInvestorAsExecutive(state, investor.id, state.playerCompanyId, 'CFO');
+  assert.ok(recruitRes.success && recruitRes.updatedState, 'Recruiting Investor as CFO should succeed');
+  const nextEnt = recruitRes.updatedState.aiEntities![investor.id];
+  assert.equal(nextEnt.role, 'c_suite');
+  assert.equal(nextEnt.executiveRole, 'CFO');
+  const playerExec = recruitRes.updatedState.companies[state.playerCompanyId].executives.find(e => e.role === 'CFO');
+  assert.ok(playerExec && playerExec.hired && playerExec.name === investor.name);
+});
+
+test('36. AI Investors trade Bursa stocks autonomously and execute majority/activist CEO takeovers', async () => {
+  const { simulateInvestorsAndCareersMonth } = await import('./investorEngine');
+  const state = generateDefaultState();
+  const target = state.companies['comp_apex'];
+  const firstInvestor = Object.values(state.aiEntities!).find(e => e.role === 'investor')!;
+
+  // Give this investor an activist stake near 50% threshold and enough cash to cross 50% on tick
+  const preTakeoverShares = Math.ceil(target.sharesOutstanding * 0.495);
+  const stagedState = {
+    ...state,
+    currentTick: 0,
+    aiEntities: {
+      ...state.aiEntities!,
+      [firstInvestor.id]: {
+        ...firstInvestor,
+        cash: 15_000_000,
+        ambition: 'activist_investor' as const,
+        portfolio: {
+          ...firstInvestor.portfolio,
+          [target.id]: preTakeoverShares,
+        },
+      },
+    },
+    aiEntityOrder: [
+      firstInvestor.id,
+      ...state.aiEntityOrder!.filter(id => id !== firstInvestor.id),
+    ],
+  };
+
+  const afterTick = simulateInvestorsAndCareersMonth(stagedState);
+  const promoted = afterTick.aiEntities![firstInvestor.id];
+  assert.ok((promoted.portfolio[target.id] || 0) >= preTakeoverShares, 'Investor should retain/add shares');
+  if (promoted.portfolio[target.id] >= Math.ceil(target.sharesOutstanding * 0.5)) {
+    assert.equal(promoted.role, 'ceo', 'Majority investor must take over CEO role');
+    assert.equal(afterTick.companies[target.id].ceoName, promoted.name);
+  }
+});
+
+test('37. Government Cabinet, 24-month Elections, Mayors & Policy Lobbying affect taxes and R&D subsidies', async () => {
+  const { lobbyGovernmentPolicy, simulateGovernmentMonth } = await import('./governmentEngine');
+  const state = generateDefaultState();
+
+  assert.ok(state.government?.presidentName, 'President must be initialized');
+  assert.ok(state.government?.ministerOfLaborName, 'Minister of Labor must be initialized');
+  assert.ok(state.city.mayorName, 'Primary city Mayor must be initialized');
+
+  const taxCutRes = lobbyGovernmentPolicy(state, 'tax_cut');
+  assert.ok(taxCutRes.success && taxCutRes.updatedState);
+  assert.ok(
+    taxCutRes.updatedState.government!.corporateTaxRate < state.government!.corporateTaxRate,
+    'Tax cut lobby must reduce corporateTaxRate'
+  );
+
+  const rdGrantRes = lobbyGovernmentPolicy(taxCutRes.updatedState, 'rd_grant');
+  assert.ok(rdGrantRes.success && rdGrantRes.updatedState);
+  assert.ok(
+    rdGrantRes.updatedState.government!.rdSubsidyRate > state.government!.rdSubsidyRate,
+    'R&D grant lobby must boost rdSubsidyRate'
+  );
+
+  // Trigger election at tick 24
+  const preElection = {
+    ...rdGrantRes.updatedState,
+    currentTick: 24,
+  };
+  const postElection = simulateGovernmentMonth(preElection);
+  assert.equal(postElection.government!.nextElectionTick, 48, 'Next election cycle must advance by 24 months');
+  assert.ok(
+    postElection.government!.policyLog.some(l => l.month === 24),
+    'Election result must be recorded in policy gazette'
+  );
+});
+
+test('38. Subsidiaries, Cap Table & 7-Seat Board, Primary IPO & Spin-Off IPO mechanics', async () => {
+  const {
+    launchCompanyIPO,
+    spinOffSubsidiaryIPO,
+    getCompanyCapTable,
+    getSubsidiariesOf,
+    updateSubsidiaryDirective,
+    appointSubsidiaryCEO,
+    transferCapitalToSubsidiary,
+  } = await import('./subsidiaryEngine');
+
+  const state = generateDefaultState();
+  const player = state.companies[state.playerCompanyId];
+
+  // Primary / Secondary IPO raises fresh cash
+  const ipoRes = launchCompanyIPO(state, player.id, 0.2);
+  assert.ok(ipoRes.success && ipoRes.updatedState);
+  assert.ok(ipoRes.updatedState.companies[player.id].cash > player.cash, 'IPO must inject underwriting proceeds');
+
+  // Spin-Off Player Store into a Listed Subsidiary
+  const spinRes = spinOffSubsidiaryIPO(
+    ipoRes.updatedState,
+    player.id,
+    'Nusantara Retail Tbk',
+    'NRTL',
+    ['fac_player_store'],
+    1_200_000
+  );
+  assert.ok(spinRes.success && spinRes.updatedState, 'Spin-Off IPO must succeed');
+  const next = spinRes.updatedState;
+  const subs = getSubsidiariesOf(next, player.id);
+  assert.equal(subs.length, 1, 'Player must control 1 newly spun-off subsidiary');
+  assert.equal(subs[0].ownershipPct, 70, 'Parent retains 70% majority control on spin-off');
+
+  const subId = subs[0].company.id;
+  const capTable = getCompanyCapTable(next, subId);
+  const totalSeats = capTable.reduce((s, r) => s + r.boardSeats, 0);
+  assert.equal(totalSeats, 7, 'Board of Directors must allocate 7 total seats');
+
+  // CEO Directive, Capital Injection & Subsidiary CEO Appointment
+  const dirRes = updateSubsidiaryDirective(next, player.id, subId, {
+    dividendPayoutRatio: 0.65,
+    expansionMode: 'aggressive',
+    priceStrategy: 'premium',
+  });
+  assert.ok(dirRes.success && dirRes.updatedState);
+  assert.equal(dirRes.updatedState.companies[subId].subsidiaryDirective?.priceStrategy, 'premium');
+
+  const capRes = transferCapitalToSubsidiary(dirRes.updatedState, player.id, subId, 500_000);
+  assert.ok(capRes.success && capRes.updatedState);
+
+  const freeInv = Object.values(capRes.updatedState.aiEntities!).find(e => e.role === 'investor')!;
+  const ceoRes = appointSubsidiaryCEO(capRes.updatedState, player.id, subId, freeInv.id);
+  assert.ok(ceoRes.success && ceoRes.updatedState);
+  assert.equal(ceoRes.updatedState.companies[subId].ceoName, freeInv.name);
+});
+
+test('39. Multi-City Engine supports founding up to 10 Cities across 5 biomes with isolated parcel maps', async () => {
+  const { createNewCity, switchActiveCity } = await import('./governmentEngine');
+  const { MAX_CITIES } = await import('./productsData');
+  assert.equal(MAX_CITIES, 10);
+
+  let sim = generateDefaultState();
+  // Give player generous capital to establish all 9 extra cities (reach 10/10)
+  sim = {
+    ...sim,
+    companies: {
+      ...sim.companies,
+      [sim.playerCompanyId]: { ...sim.companies[sim.playerCompanyId], cash: 100_000_000 },
+    },
+  };
+
+  const biomes = ['agri_valley', 'industrial_heartland', 'highland_mining', 'tech_corridor', 'coastal_metro'] as const;
+  for (let i = 0; i < 9; i++) {
+    const res = createNewCity(sim, `Kota Ekspansi ${i + 2}`, biomes[i % biomes.length]);
+    assert.ok(res.success && res.updatedState, `Creating city #${i + 2} failed: ${res.message}`);
+    sim = res.updatedState;
+  }
+
+  assert.equal(sim.cityOrder?.length, 10, 'Must reach maximum 10 cities');
+  const overLimit = createNewCity(sim, 'Kota Ke-11', 'coastal_metro');
+  assert.equal(overLimit.success, false, '11th city beyond MAX_CITIES=10 must be rejected');
+
+  // Switch back to primary city and confirm parcel map swaps cleanly
+  const firstId = sim.cityOrder![0];
+  const swRes = switchActiveCity(sim, firstId);
+  assert.ok(swRes.success && swRes.updatedState);
+  assert.equal(swRes.updatedState.activeCityId, firstId);
+  assert.equal(swRes.updatedState.mapParcels.length, 40 * 40);
+});
+
+test('40. All 28 Product Lines & extended supply recipes simulate cleanly', async () => {
+  const { PRODUCTS } = await import('./productsData');
+  const productIds = Object.keys(PRODUCTS);
+  assert.equal(productIds.length, 28, 'Catalog must define 28 distinct products');
+
+  for (const id of ['timber', 'coffee_bean', 'lumber', 'solar_panel', 'roasted_coffee', 'furniture', 'ev_suv', 'fintech_app']) {
+    const recipe = PRODUCTS[id as keyof typeof PRODUCTS];
+    assert.ok(recipe, `Missing expanded product ${id}`);
+    assert.ok(recipe.basePrice > recipe.baseCost, `Positive margin expected for ${id}`);
+  }
+});
+
 

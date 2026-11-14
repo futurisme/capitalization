@@ -8,6 +8,7 @@ import {
 import { GOVT_OWNER_ID, RESIDENT_OWNER_ID, RESOURCE_DEPOSIT_META } from './productsData';
 import { clamp, deterministicHash, finiteOr, round1, round2, roundCurrency } from './precisionMath';
 import { recalculateCityTraffic } from './spatialGrid';
+import { PRIMARY_CITY_ID } from './governmentEngine';
 
 const RESIDENT_HOUSE_NAMES: Record<1 | 2 | 3, readonly string[]> = {
   1: ['Rumah Warga Asri', 'Pondok Keluarga Suburban', 'Rumah Sederhana Taman'],
@@ -245,7 +246,8 @@ export function claimResidentProperty(
         }
       : p
   );
-  const updatedParcels = recalculateCityTraffic(markedParcels, nextFacilities);
+  const activeId = state.activeCityId || PRIMARY_CITY_ID;
+  const updatedParcels = recalculateCityTraffic(markedParcels, nextFacilities, 1.0, activeId);
   const displacedResidents = fac.lastMonthUnitsSold || (fac.residentFamilies || 8) * 4;
   const housingSummary = computeHousingSummary(state.city.population, nextFacilities);
 
@@ -325,7 +327,8 @@ export function demolishResidentProperty(
         }
       : p
   );
-  const updatedParcels = recalculateCityTraffic(markedParcels, nextFacilities);
+  const activeId = state.activeCityId || PRIMARY_CITY_ID;
+  const updatedParcels = recalculateCityTraffic(markedParcels, nextFacilities, 1.0, activeId);
   const displacedResidents = fac.lastMonthUnitsSold || (fac.residentFamilies || 8) * 4;
   const housingSummary = computeHousingSummary(state.city.population, nextFacilities);
 
@@ -385,7 +388,8 @@ export function buyVacantLandParcel(
     return { success: false, reason: 'Kavling ini sudah menjadi milik Anda.', cost: 0 };
   }
 
-  const price = roundCurrency(Math.max(40000, finiteOr(parcel.landValue, 88000)));
+  const grantDiscount = clamp(finiteOr(state.city.landGrantDiscount ?? 0, 0), 0, 0.4);
+  const price = roundCurrency(Math.max(40000, finiteOr(parcel.landValue, 88000)) * (1 - grantDiscount));
   if (player.cash < price) {
     return {
       success: false,
@@ -495,7 +499,8 @@ export function computeHousingSummary(
  */
 export function simulateAutomatedHousingAndResources(state: SimulationState): SimulationState {
   const MAX_RESIDENT_HOUSES = 44;
-  const gridSize = Math.round(Math.sqrt(state.mapParcels.length)) || 32;
+  const gridSize = Math.round(Math.sqrt(state.mapParcels.length)) || 40;
+  const activeCityId = state.activeCityId || PRIMARY_CITY_ID;
 
   const nextFacilities = { ...state.facilities };
   let nextParcels = state.mapParcels;
@@ -507,9 +512,13 @@ export function simulateAutomatedHousingAndResources(state: SimulationState): Si
 
   for (let i = 0; i < facilityValues.length; i++) {
     const f = facilityValues[i];
-    if (isResidentFacility(f)) {
-      residentHouses.push(f);
-    } else if (f.companyId !== GOVT_OWNER_ID) {
+    if ((f.cityId || PRIMARY_CITY_ID) === activeCityId) {
+      if (isResidentFacility(f)) {
+        residentHouses.push(f);
+      } else if (f.companyId !== GOVT_OWNER_ID) {
+        corporateFacilitiesCount++;
+      }
+    } else if (!isResidentFacility(f) && f.companyId !== GOVT_OWNER_ID) {
       corporateFacilitiesCount++;
     }
   }
@@ -577,6 +586,7 @@ export function simulateAutomatedHousingAndResources(state: SimulationState): Si
         state.currentTick,
         residentHouses.length + 1
       );
+      house.cityId = activeCityId;
       nextFacilities[house.id] = house;
       residentHouses.push(house);
       nextParcels = nextParcels.map(p =>
@@ -662,11 +672,11 @@ export function simulateAutomatedHousingAndResources(state: SimulationState): Si
   }
 
   if (spawnedParcelsDirty) {
-    nextParcels = recalculateCityTraffic(nextParcels, nextFacilities);
+    nextParcels = recalculateCityTraffic(nextParcels, nextFacilities, 1.0, activeCityId);
   }
 
   // Compute Capitalism Lab 13 Macro Labor & CPI indicators
-  const prevCpi = finiteOr(state.macro.consumerPriceIndex, 100.0);
+  const prevCpi = finiteOr(state.macro.consumerPriceIndex ?? 100.0, 100.0);
   const nextCpi = round2(prevCpi * (1 + state.macro.inflationRate / 1200));
 
   const targetUnemployment =
@@ -678,7 +688,7 @@ export function simulateAutomatedHousingAndResources(state: SimulationState): Si
       ? 5.6
       : 4.8;
   const jobRelief = clamp((corporateFacilitiesCount - 10) * 0.08, -0.5, 2.2);
-  const prevUnemployment = finiteOr(state.macro.unemploymentRate, 5.15);
+  const prevUnemployment = finiteOr(state.macro.unemploymentRate ?? 5.15, 5.15);
   const nextUnemployment = clamp(
     round2(prevUnemployment * 0.8 + (targetUnemployment - jobRelief) * 0.2),
     2.1,

@@ -16,33 +16,41 @@ export interface AssetSpec {
 }
 
 /**
- * Complete registry of 60 original procedural studio assets:
- * - 20 Product Studio Renders
+ * Complete registry of 68 original procedural studio assets:
+ * - 28 Product Studio Renders
  * - 21 Corporate & Civic Brand Logos (NUSA, 9 Initial AI, 10 Entrant Pool, PEMKOT)
  * - 19 Architectural 2.5D Facility Thumbnails
  */
 export const ASSET_CATALOG: Record<string, AssetSpec> = {
-  // --- 20 PRODUCTS ---
+  // --- 28 PRODUCTS ---
   'product:wheat': { key: 'product:wheat', kind: 'product', id: 'wheat', label: 'Gandum & Pangan', bgStart: '#291c09', bgEnd: '#0b101d', accent: '#f59e0b' },
   'product:livestock': { key: 'product:livestock', kind: 'product', id: 'livestock', label: 'Ternak & Daging', bgStart: '#2b0d16', bgEnd: '#0b101d', accent: '#fb7185' },
   'product:crude_oil': { key: 'product:crude_oil', kind: 'product', id: 'crude_oil', label: 'Minyak Mentah', bgStart: '#1b202b', bgEnd: '#080c15', accent: '#f59e0b' },
   'product:iron_ore': { key: 'product:iron_ore', kind: 'product', id: 'iron_ore', label: 'Bijih Besi', bgStart: '#261812', bgEnd: '#0b101d', accent: '#f97316' },
   'product:silicon': { key: 'product:silicon', kind: 'product', id: 'silicon', label: 'Silikon Kristal', bgStart: '#0d2238', bgEnd: '#080e1a', accent: '#38bdf8' },
+  'product:timber': { key: 'product:timber', kind: 'product', id: 'timber', label: 'Kayu Hutan', bgStart: '#24180d', bgEnd: '#0a0e17', accent: '#d97706' },
+  'product:coffee_bean': { key: 'product:coffee_bean', kind: 'product', id: 'coffee_bean', label: 'Biji Kopi Hijau', bgStart: '#152b16', bgEnd: '#090e15', accent: '#4ade80' },
   'product:flour': { key: 'product:flour', kind: 'product', id: 'flour', label: 'Tepung Industri', bgStart: '#262014', bgEnd: '#0b101d', accent: '#fde68a' },
   'product:steel': { key: 'product:steel', kind: 'product', id: 'steel', label: 'Baja Konstruksi', bgStart: '#1a2534', bgEnd: '#090e18', accent: '#cbd5e1' },
   'product:plastic': { key: 'product:plastic', kind: 'product', id: 'plastic', label: 'Resin Polimer', bgStart: '#141c38', bgEnd: '#080c17', accent: '#38bdf8' },
   'product:electronic_chip': { key: 'product:electronic_chip', kind: 'product', id: 'electronic_chip', label: 'Prosesor & Chip', bgStart: '#0b2233', bgEnd: '#070d18', accent: '#38bdf8' },
   'product:fabric': { key: 'product:fabric', kind: 'product', id: 'fabric', label: 'Kain & Tekstil', bgStart: '#291432', bgEnd: '#0b101d', accent: '#f472b6' },
   'product:battery_cell': { key: 'product:battery_cell', kind: 'product', id: 'battery_cell', label: 'Sel Baterai EV', bgStart: '#08291f', bgEnd: '#070d18', accent: '#34d399' },
+  'product:lumber': { key: 'product:lumber', kind: 'product', id: 'lumber', label: 'Papan Kayu Olahan', bgStart: '#2b1b0a', bgEnd: '#0b101d', accent: '#f59e0b' },
+  'product:solar_panel': { key: 'product:solar_panel', kind: 'product', id: 'solar_panel', label: 'Panel Surya', bgStart: '#0d213d', bgEnd: '#080d18', accent: '#38bdf8' },
   'product:bread': { key: 'product:bread', kind: 'product', id: 'bread', label: 'Roti Artisan', bgStart: '#2c1b0a', bgEnd: '#0b101d', accent: '#fbbf24' },
   'product:soft_drink': { key: 'product:soft_drink', kind: 'product', id: 'soft_drink', label: 'Minuman Soda', bgStart: '#300e1a', bgEnd: '#0b101d', accent: '#f43f5e' },
+  'product:roasted_coffee': { key: 'product:roasted_coffee', kind: 'product', id: 'roasted_coffee', label: 'Kopi Panggang', bgStart: '#29170c', bgEnd: '#0b0e17', accent: '#fbbf24' },
   'product:fashion_apparel': { key: 'product:fashion_apparel', kind: 'product', id: 'fashion_apparel', label: 'Busana Desainer', bgStart: '#161f3d', bgEnd: '#0b101d', accent: '#60a5fa' },
+  'product:furniture': { key: 'product:furniture', kind: 'product', id: 'furniture', label: 'Furnitur Kantor', bgStart: '#241a10', bgEnd: '#0a0e18', accent: '#38bdf8' },
   'product:medicine': { key: 'product:medicine', kind: 'product', id: 'medicine', label: 'Farmasi & Obat', bgStart: '#082921', bgEnd: '#070d18', accent: '#34d399' },
   'product:smartphone': { key: 'product:smartphone', kind: 'product', id: 'smartphone', label: 'Smartphone 5G', bgStart: '#0e1f38', bgEnd: '#070c17', accent: '#60a5fa' },
   'product:laptop': { key: 'product:laptop', kind: 'product', id: 'laptop', label: 'Laptop Ultra Pro', bgStart: '#152236', bgEnd: '#070b14', accent: '#38bdf8' },
   'product:automobile': { key: 'product:automobile', kind: 'product', id: 'automobile', label: 'Mobil Listrik', bgStart: '#0a2033', bgEnd: '#070b15', accent: '#38bdf8' },
+  'product:ev_suv': { key: 'product:ev_suv', kind: 'product', id: 'ev_suv', label: 'SUV Listrik EV', bgStart: '#092420', bgEnd: '#070b15', accent: '#34d399' },
   'product:software_os': { key: 'product:software_os', kind: 'product', id: 'software_os', label: 'Sistem Operasi OS', bgStart: '#0d213a', bgEnd: '#070b16', accent: '#38bdf8' },
   'product:ai_enterprise': { key: 'product:ai_enterprise', kind: 'product', id: 'ai_enterprise', label: 'Suite AI Korporat', bgStart: '#211340', bgEnd: '#070a16', accent: '#e879f9' },
+  'product:fintech_app': { key: 'product:fintech_app', kind: 'product', id: 'fintech_app', label: 'FinTech App', bgStart: '#0a2926', bgEnd: '#070b16', accent: '#34d399' },
 
   // --- 21 CORPORATE & CIVIC LOGOS ---
   'company:comp_player': { key: 'company:comp_player', kind: 'company', id: 'comp_player', label: 'NUSA', bgStart: '#0369a1', bgEnd: '#0f172a', accent: '#38bdf8' },

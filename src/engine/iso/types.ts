@@ -1,3 +1,5 @@
+import { CityBiome } from '../../types/game';
+
 export interface Camera {
   x: number;
   y: number;
@@ -46,4 +48,6 @@ export interface IsometricRenderOptions {
   showTrafficOverlay?: boolean;
   showResourcesOverlay?: boolean;
   showResidentFocus?: boolean;
+  cityId?: string;
+  cityBiome?: CityBiome;
 }

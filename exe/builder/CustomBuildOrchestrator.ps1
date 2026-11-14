@@ -1,25 +1,64 @@
 param(
-    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
+    [ValidateSet("All", "Game", "Tests")]
+    [string]$Target = "All",
+    [switch]$Clean,
+    [switch]$VerboseTests
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location $ProjectRoot
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+try {
+    $secProto = [Net.SecurityProtocolType]::Tls12
+    if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {
+        $secProto = $secProto -bor [Net.SecurityProtocolType]::Tls13
+    }
+    [Net.ServicePointManager]::SecurityProtocol = $secProto
+} catch {}
 
-$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$Stopwatch    = [System.Diagnostics.Stopwatch]::StartNew()
 $ToolchainDir = Join-Path $ProjectRoot ".toolchain"
 $BuildDir     = Join-Path $ProjectRoot "build_native"
 $ObjDir       = Join-Path $BuildDir "obj"
 $DistDir      = Join-Path $ProjectRoot "dist"
 $TargetExe    = Join-Path $DistDir "CapLab13Native.exe"
 $TestExe      = Join-Path $BuildDir "CapLab13Tests.exe"
+$SmokeCache   = Join-Path $BuildDir ".smoke_verified"
+$ParityLog    = Join-Path $BuildDir "parity_last.log"
 
 New-Item -ItemType Directory -Force -Path $BuildDir, $ObjDir, $DistDir | Out-Null
 
+function Write-StageRow {
+    param(
+        [string]$Tag,
+        [string]$Text,
+        [string]$Color = "Gray"
+    )
+    Write-Host ("  {0,-15} | {1}" -f $Tag, $Text) -ForegroundColor $Color
+}
+
+function Add-PathFront {
+    param([string]$Dir)
+    if (-not $Dir -or -not (Test-Path $Dir)) { return }
+    $norm = [System.IO.Path]::GetFullPath($Dir).TrimEnd('\', '/')
+    $parts = @($env:PATH -split ';' | Where-Object { $_ -ne '' })
+    if (-not ($parts | Where-Object { $_.TrimEnd('\', '/').Equals($norm, [System.StringComparison]::OrdinalIgnoreCase) })) {
+        $env:PATH = "$norm;$env:PATH"
+    }
+}
+
 function Find-MsvcEnv {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (Get-Command cl.exe -ErrorAction SilentlyContinue) {
+        return $true
+    }
+
+    $vswhereCandidates = @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
+        "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
+    )
+    foreach ($vswhere in $vswhereCandidates) {
+        if (-not (Test-Path $vswhere)) { continue }
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
         if ($installPath) {
             $devCmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
             if (Test-Path $devCmd) {
@@ -29,8 +68,23 @@ function Find-MsvcEnv {
                         [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
                     }
                 }
-                return (Get-Command cl.exe -ErrorAction SilentlyContinue) -ne $null
+                if (Get-Command cl.exe -ErrorAction SilentlyContinue) { return $true }
             }
+        }
+    }
+
+    $vsRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ } | ForEach-Object { Join-Path $_ "Microsoft Visual Studio" }
+    foreach ($vr in $vsRoots) {
+        if (-not (Test-Path $vr)) { continue }
+        $vcvars = Get-ChildItem -Path $vr -Filter "vcvars64.bat" -Recurse -Depth 5 -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($vcvars) {
+            $envVars = cmd /c "`"$($vcvars.FullName)`" && set"
+            foreach ($line in $envVars) {
+                if ($line -match "^([^=]+)=(.*)$") {
+                    [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+                }
+            }
+            if (Get-Command cl.exe -ErrorAction SilentlyContinue) { return $true }
         }
     }
     return $false
@@ -38,20 +92,69 @@ function Find-MsvcEnv {
 
 function Find-LocalOrPathLlvm {
     if (Test-Path $ToolchainDir) {
-        $clangCandidate = Get-ChildItem -Path $ToolchainDir -Filter "clang++.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($clangCandidate) {
-            $binDir = $clangCandidate.Directory.FullName
-            $env:PATH = "$binDir;$env:PATH"
+        $clangLocal = Get-ChildItem -Path $ToolchainDir -Filter "clang++.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($clangLocal) {
+            Add-PathFront $clangLocal.Directory.FullName
             return $true
         }
     }
-    if (Get-Command clang++.exe -ErrorAction SilentlyContinue) { return $true }
-    if (Get-Command g++.exe -ErrorAction SilentlyContinue) { return $true }
+
+    if ((Get-Command clang++.exe -ErrorAction SilentlyContinue) -or (Get-Command g++.exe -ErrorAction SilentlyContinue)) {
+        return $true
+    }
+
+    $staticBinCandidates = @(
+        "C:\msys64\clang64\bin",
+        "C:\msys64\ucrt64\bin",
+        "C:\msys64\mingw64\bin",
+        "C:\Program Files\LLVM\bin",
+        "C:\Program Files (x86)\LLVM\bin",
+        "C:\mingw64\bin",
+        "C:\llvm-mingw\bin",
+        "$env:USERPROFILE\scoop\apps\llvm-mingw\current\bin",
+        "$env:USERPROFILE\scoop\apps\mingw\current\bin",
+        "$env:USERPROFILE\scoop\apps\llvm\current\bin",
+        "$env:ProgramData\chocolatey\bin"
+    )
+    foreach ($dir in $staticBinCandidates) {
+        if (-not $dir -or -not (Test-Path $dir)) { continue }
+        if ((Test-Path (Join-Path $dir "clang++.exe")) -or (Test-Path (Join-Path $dir "g++.exe"))) {
+            Add-PathFront $dir
+            return $true
+        }
+    }
+
+    $globBases = @(
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Packages",
+        "$env:LOCALAPPDATA\Programs",
+        "$env:USERPROFILE\.toolchains",
+        "C:\Tools"
+    )
+    try {
+        $drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady }
+        foreach ($drv in $drives) {
+            $topDirs = Get-ChildItem -Path $drv.RootDirectory.FullName -Directory -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Name -match 'llvm|mingw|msys|clang|toolchain|compil' }
+            foreach ($td in $topDirs) { $globBases += $td.FullName }
+        }
+    } catch {}
+
+    foreach ($base in ($globBases | Select-Object -Unique)) {
+        if (-not $base -or -not (Test-Path $base)) { continue }
+        $hit = Get-ChildItem -Path $base -Filter "clang++.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $hit) {
+            $hit = Get-ChildItem -Path $base -Filter "g++.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if ($hit) {
+            Add-PathFront $hit.Directory.FullName
+            return $true
+        }
+    }
     return $false
 }
 
 function Install-PortableLlvmToolchain {
-    Write-Host "  [Download] Mengambil rilis portabel LLVM-MinGW (C++23 + Win11 SDK headers/libs)..." -ForegroundColor Yellow
+    Write-StageRow "[Download]" "Fetching portable LLVM-MinGW (C++23 + Win11 SDK)..." "Yellow"
     New-Item -ItemType Directory -Force -Path $ToolchainDir | Out-Null
 
     try {
@@ -59,24 +162,24 @@ function Install-PortableLlvmToolchain {
         $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest" -Headers $headers -TimeoutSec 30
         $asset = $rel.assets | Where-Object { $_.name -match "ucrt-x86_64\.zip$" } | Select-Object -First 1
         if (-not $asset) {
-            throw "Aset ucrt-x86_64.zip tidak ditemukan pada rilis LLVM-MinGW."
+            throw "ucrt-x86_64.zip asset not found in LLVM-MinGW release."
         }
         $zipPath = Join-Path $ToolchainDir $asset.name
-        Write-Host "  [Download] $($asset.name) ($([math]::Round($asset.size / 1MB, 1)) MB)..." -ForegroundColor Cyan
+        Write-StageRow "[Download]" "$($asset.name) ($([math]::Round($asset.size / 1MB, 1)) MB)" "Cyan"
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add("User-Agent", "CapLab13-CustomBuilder")
         $wc.DownloadFile($asset.browser_download_url, $zipPath)
 
-        Write-Host "  [Extract] Mengekstrak toolchain ke .toolchain\ ..." -ForegroundColor Cyan
+        Write-StageRow "[Extract]" "Unpacking portable toolchain into .toolchain\..." "Cyan"
         Expand-Archive -Path $zipPath -DestinationPath $ToolchainDir -Force
         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 
         if (Find-LocalOrPathLlvm) {
-            Write-Host "  [OK] Toolchain C++23 portabel siap digunakan." -ForegroundColor Green
+            Write-StageRow "[Found]" "Portable C++23 toolchain verified cleanly." "Green"
             return $true
         }
     } catch {
-        Write-Host "  [Warn] Unduhan langsung gagal ($($_.Exception.Message)). Mencoba winget..." -ForegroundColor DarkYellow
+        Write-StageRow "[Warn]" "Direct fetch failed ($($_.Exception.Message)); trying winget..." "DarkYellow"
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             & winget install -e --id MartinStorsjo.LLVM-MinGW.UCRT --silent --accept-package-agreements --accept-source-agreements
             $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -91,8 +194,17 @@ function Install-PortableLlvmToolchain {
 function Test-CompilerSmoke {
     param([string]$Mode, [string]$CompilerExe)
 
-    $smokeSrc = Join-Path $BuildDir "__agent_smoke.cpp"
-    $smokeExe = Join-Path $BuildDir "__agent_smoke.exe"
+    $cmdInfo = Get-Command $CompilerExe -ErrorAction SilentlyContinue
+    if (-not $cmdInfo) { return $false }
+
+    $item = Get-Item $cmdInfo.Source -ErrorAction SilentlyContinue
+    $sig = if ($item) { "$Mode|$($item.FullName)|$($item.Length)|$($item.LastWriteTimeUtc.Ticks)" } else { "$Mode|$CompilerExe" }
+    if ((Test-Path $SmokeCache) -and ((Get-Content $SmokeCache -Raw -ErrorAction SilentlyContinue).Trim() -eq $sig)) {
+        return $true
+    }
+
+    $smokeSrc = Join-Path $BuildDir "__agent_smoke_$PID.cpp"
+    $smokeExe = Join-Path $BuildDir "__agent_smoke_$PID.exe"
     $code = @"
 #include <iostream>
 #include <vector>
@@ -120,7 +232,11 @@ int main() {
             return $false
         }
         & $smokeExe *> $null
-        return ($LASTEXITCODE -eq 0)
+        if ($LASTEXITCODE -eq 0) {
+            Set-Content -Path $SmokeCache -Value $sig -Encoding UTF8 -ErrorAction SilentlyContinue
+            return $true
+        }
+        return $false
     } catch {
         return $false
     } finally {
@@ -130,53 +246,58 @@ int main() {
 }
 
 # ============================================================================
-# STEP 1: CHECK & VERIFY / PROVISION TOOLS
+# STAGE 1: DEVICE-WIDE TOOL DISCOVERY & ZERO-DOWNLOAD CHECK
 # ============================================================================
-Write-Host "[1/3] Memeriksa ketersediaan & integritas toolchain C++23 & Windows 11 SDK..." -ForegroundColor Cyan
+Write-StageRow "[1/4] Toolchain" "Probing local C++23 compiler & Windows 11 SDK..." "Cyan"
 
 $ToolMode = $null
-if ((Get-Command cl.exe -ErrorAction SilentlyContinue) -or (Find-MsvcEnv)) {
+$ActiveCompilerPath = ""
+if (Find-MsvcEnv) {
     if (Test-CompilerSmoke -Mode "MSVC" -CompilerExe "cl.exe") {
         $ToolMode = "MSVC"
-        Write-Host "  [Found] Microsoft Visual C++ (cl.exe) terverifikasi." -ForegroundColor Green
+        $ActiveCompilerPath = (Get-Command cl.exe).Source
+        Write-StageRow "[Data-Saver]" "Reused local MSVC (0 MB downloaded): $ActiveCompilerPath" "Green"
     } else {
-        Write-Host "  [Warn] cl.exe terdeteksi namun smoke test gagal; memeriksa LLVM-MinGW..." -ForegroundColor Yellow
+        Write-StageRow "[Warn]" "cl.exe detected but smoke probe failed; scanning LLVM-MinGW..." "Yellow"
     }
 }
 
 if (-not $ToolMode -and (Find-LocalOrPathLlvm)) {
     $candidateMode = if (Get-Command clang++.exe -ErrorAction SilentlyContinue) { "CLANG" } else { "GCC" }
     $candidateExe = if ($candidateMode -eq "CLANG") { "clang++.exe" } else { "g++.exe" }
+    $ActiveCompilerPath = (Get-Command $candidateExe).Source
     if (Test-CompilerSmoke -Mode $candidateMode -CompilerExe $candidateExe) {
         $ToolMode = $candidateMode
-        Write-Host "  [Found] Toolchain C++23 ($ToolMode) lolos smoke verification." -ForegroundColor Green
+        Write-StageRow "[Data-Saver]" "Reused local $ToolMode (0 MB downloaded): $ActiveCompilerPath" "Green"
+        Write-StageRow "[Found]" "Toolchain C++23 ($ToolMode) lolos smoke verification." "Green"
     } else {
-        Write-Host "  [Repair] Toolchain lokal tidak lolos smoke test; membersihkan .toolchain\ dan mengunduh ulang..." -ForegroundColor Yellow
-        if (Test-Path $ToolchainDir) {
+        Write-StageRow "[Repair]" "Local toolchain failed smoke probe; resetting .smoke_verified..." "Yellow"
+        Remove-Item $SmokeCache -Force -ErrorAction SilentlyContinue
+        if ($ActiveCompilerPath.StartsWith($ToolchainDir, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path $ToolchainDir)) {
             Remove-Item -Path $ToolchainDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
 if (-not $ToolMode) {
-    Write-Host "  [Missing] Menginstal toolchain C++23 portabel (LLVM-MinGW)..." -ForegroundColor Yellow
+    Write-StageRow "[Missing]" "No local compiler found; provisioning portable LLVM-MinGW..." "Yellow"
     if (-not (Install-PortableLlvmToolchain)) {
-        throw "Gagal mengunduh toolchain C++23 otomatis. Periksa koneksi internet Anda lalu coba kembali."
+        throw "Failed to provision C++23 toolchain automatically. Check internet connectivity and retry."
     }
     $ToolMode = if (Get-Command clang++.exe -ErrorAction SilentlyContinue) { "CLANG" } else { "GCC" }
     $candidateExe = if ($ToolMode -eq "CLANG") { "clang++.exe" } else { "g++.exe" }
+    $ActiveCompilerPath = (Get-Command $candidateExe).Source
     if (-not (Test-CompilerSmoke -Mode $ToolMode -CompilerExe $candidateExe)) {
-        throw "Toolchain $ToolMode terpasang namun gagal menjalankan smoke test C++23."
+        throw "Toolchain $ToolMode installed but C++23 smoke probe failed."
     }
 }
 
 # ============================================================================
-# STEP 2: CUSTOM IN-HOUSE PARALLEL BUILD & PARITY VERIFICATION
+# STAGE 2: INCREMENTAL PARALLEL COMPILE & LINK (.RSP)
 # ============================================================================
-Write-Host ""
-Write-Host "[2/3] Membangun CapLab13Native.exe secara paralel ($ToolMode, $([Environment]::ProcessorCount) thread)..." -ForegroundColor Cyan
+$Workers = [Environment]::ProcessorCount
+Write-StageRow "[2/4] Compile" "Target=$Target | Mode=$ToolMode | Threads=$Workers (Baseline x86-64)" "Cyan"
 
-# Universal baseline x86-64 SSE2 ensures 100% compatibility across all Windows 11 x64 CPUs (zero 0xC000001D AVX2 crashes)
 $UseBaselineX64 = $true
 $ExtraLinkFlags = if ($env:CAPLAB_EXTRA_LINK_FLAGS) {
     [string[]]($env:CAPLAB_EXTRA_LINK_FLAGS -split ";" | Where-Object { $_ -ne "" })
@@ -186,9 +307,10 @@ $ExtraLinkFlags = if ($env:CAPLAB_EXTRA_LINK_FLAGS) {
 $DynamicFallback = ($env:CAPLAB_DYNAMIC_STDLIB_FALLBACK -eq "1")
 
 $FingerprintFile = Join-Path $BuildDir ".build_fingerprint"
-$CurrentFingerprint = "$ToolMode|baseline=$UseBaselineX64|dyn=$DynamicFallback"
+$CurrentFingerprint = "$ToolMode|$ActiveCompilerPath|baseline=$UseBaselineX64|dyn=$DynamicFallback"
 $PreviousFingerprint = if (Test-Path $FingerprintFile) { (Get-Content $FingerprintFile -Raw -ErrorAction SilentlyContinue).Trim() } else { "" }
-if ($PreviousFingerprint -ne $CurrentFingerprint) {
+$ForceCleanRebuild = $Clean.IsPresent -or ($PreviousFingerprint -ne $CurrentFingerprint)
+if ($ForceCleanRebuild) {
     Remove-Item -Path (Join-Path $ObjDir "*") -Force -Recurse -ErrorAction SilentlyContinue
     Set-Content -Path $FingerprintFile -Value $CurrentFingerprint -Encoding UTF8
 }
@@ -215,22 +337,57 @@ $AppSources = @(
     "src\ui\GameApp.cpp"
 )
 
-$AllSources = $EngineSources + $AppSources
+$TestSource = "tests\NativeParityTests.cpp"
+$CompileUnits = switch ($Target) {
+    "Tests" { $EngineSources + @($TestSource) }
+    "Game"  { $EngineSources + $AppSources }
+    default { $EngineSources + $AppSources + @($TestSource) }
+}
 $CommonDefines = @("WIN32_LEAN_AND_MEAN", "NOMINMAX", "UNICODE", "_UNICODE", "_WIN32_WINNT=0x0A00", "NTDDI_VERSION=0x0A000010")
 $WinLibs = @("user32", "gdi32", "d3d11", "dxgi", "d2d1", "dwrite", "dwmapi", "shcore", "shell32", "ole32", "comdlg32", "winmm", "avrt", "uuid", "dxguid")
 
+$LatestHeaderUtc = [datetime]::MinValue
+foreach ($hdr in (Get-ChildItem -Path (Join-Path $ProjectRoot "src") -Include "*.hpp","*.h" -Recurse -File -ErrorAction SilentlyContinue)) {
+    if ($hdr.LastWriteTimeUtc -gt $LatestHeaderUtc) {
+        $LatestHeaderUtc = $hdr.LastWriteTimeUtc
+    }
+}
+
 function Invoke-ParallelCompile {
-    param([string[]]$Sources, [string]$CompilerExe, [string[]]$BaseFlags, [bool]$IsMsvc)
+    param(
+        [string[]]$Sources,
+        [string]$CompilerExe,
+        [string[]]$BaseFlags,
+        [bool]$IsMsvc,
+        [datetime]$HeaderCutoffUtc,
+        [bool]$CleanAll
+    )
 
     $MaxWorkers = [Math]::Max(2, [Environment]::ProcessorCount)
-    $Pool = [RunspaceFactory]::CreateRunspacePool(1, $MaxWorkers)
-    $Pool.Open()
-
+    $Pool = $null
     $Jobs = @()
+    $CompiledMap = @{}
+    $SkippedCount = 0
+
     foreach ($rel in $Sources) {
         $srcPath = Join-Path $ProjectRoot $rel
         $objName = ($rel -replace '[\\/.]', '_') + $(if ($IsMsvc) { ".obj" } else { ".o" })
         $objPath = Join-Path $ObjDir $objName
+
+        $srcItem = Get-Item $srcPath -ErrorAction Stop
+        $objItem = Get-Item $objPath -ErrorAction SilentlyContinue
+        $newestDepUtc = if ($srcItem.LastWriteTimeUtc -gt $HeaderCutoffUtc) { $srcItem.LastWriteTimeUtc } else { $HeaderCutoffUtc }
+
+        if (-not $CleanAll -and $objItem -and $objItem.Length -gt 0 -and $objItem.LastWriteTimeUtc -ge $newestDepUtc) {
+            $CompiledMap[$rel] = [string]$objPath
+            $SkippedCount++
+            continue
+        }
+
+        if ($null -eq $Pool) {
+            $Pool = [RunspaceFactory]::CreateRunspacePool(1, $MaxWorkers)
+            $Pool.Open()
+        }
 
         $ps = [PowerShell]::Create()
         $ps.RunspacePool = $Pool
@@ -245,7 +402,7 @@ function Invoke-ParallelCompile {
             }
             $output = & $Compiler @argsList 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {
-                throw "Kompilasi gagal ($LASTEXITCODE): $Src`n$output"
+                throw "Compile error ($LASTEXITCODE): $Src`n$output"
             }
             return $Obj
         }).AddArgument($CompilerExe).AddArgument($BaseFlags).AddArgument($srcPath).AddArgument($objPath).AddArgument($IsMsvc)
@@ -258,22 +415,31 @@ function Invoke-ParallelCompile {
         }
     }
 
-    [string[]]$CompiledObjs = @()
-    try {
-        foreach ($job in $Jobs) {
-            try {
-                [void]$job.PS.EndInvoke($job.Handle)
-                Write-Host "  [CC] $($job.Rel)" -ForegroundColor DarkGray
-                $CompiledObjs += [string]$job.Obj
-            } finally {
-                $job.PS.Dispose()
+    if ($SkippedCount -gt 0) {
+        Write-StageRow "[Cache]" "$SkippedCount unchanged translation unit(s) skipped (incremental build)" "DarkCyan"
+    }
+
+    if ($Jobs.Count -gt 0) {
+        try {
+            foreach ($job in $Jobs) {
+                try {
+                    [void]$job.PS.EndInvoke($job.Handle)
+                    Write-StageRow "[CC]" "$($job.Rel)" "DarkGray"
+                    $CompiledMap[$job.Rel] = [string]$job.Obj
+                } finally {
+                    $job.PS.Dispose()
+                }
+            }
+        } finally {
+            if ($Pool) {
+                $Pool.Close()
+                $Pool.Dispose()
             }
         }
-    } finally {
-        $Pool.Close()
-        $Pool.Dispose()
     }
-    return ,$CompiledObjs
+
+    [string[]]$OrderedObjs = foreach ($rel in $Sources) { [string]$CompiledMap[$rel] }
+    return ,$OrderedObjs
 }
 
 function Write-LinkResponseFile {
@@ -293,63 +459,96 @@ function Invoke-CleanNativeStep {
     $raw = & $ToolExe @ToolArgs 2>&1
     $code = $LASTEXITCODE
     foreach ($item in $raw) {
-        if ($item -is [System.Management.Automation.ErrorRecord]) {
-            Write-Host $item.ToString()
-        } else {
-            Write-Host $item
+        $text = if ($item -is [System.Management.Automation.ErrorRecord]) { $item.ToString() } else { [string]$item }
+        if ($text -and $text.Trim() -ne "") {
+            Write-Host "    $text"
         }
     }
     return $code
+}
+
+function Test-ResourceUpToDate {
+    param([string]$ResFile, [string]$ProjectRoot)
+    if ($ForceCleanRebuild -or -not (Test-Path $ResFile)) { return $false }
+    $resTime = (Get-Item $ResFile).LastWriteTimeUtc
+    $rcTime = (Get-Item (Join-Path $ProjectRoot "resources\resource.rc")).LastWriteTimeUtc
+    $mfTime = (Get-Item (Join-Path $ProjectRoot "resources\app.manifest")).LastWriteTimeUtc
+    return ($resTime -ge $rcTime -and $resTime -ge $mfTime)
 }
 
 $prevErrorPref = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 
 try {
+    $BuiltNewObj = $false
+    $LinkWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $buildTests = ($Target -ne "Game")
+    $buildGame  = ($Target -ne "Tests")
+
     if ($ToolMode -eq "MSVC") {
         $resOut = Join-Path $ObjDir "resource.res"
-        if ((Invoke-CleanNativeStep "rc.exe" @("/nologo", "/i", (Join-Path $ProjectRoot "resources"), "/fo", $resOut, (Join-Path $ProjectRoot "resources\resource.rc"))) -ne 0) {
-            throw "rc.exe gagal mengompilasi resource.rc"
+        if ($buildGame -and (-not (Test-ResourceUpToDate -ResFile $resOut -ProjectRoot $ProjectRoot))) {
+            if ((Invoke-CleanNativeStep "rc.exe" @("/nologo", "/i", (Join-Path $ProjectRoot "resources"), "/fo", $resOut, (Join-Path $ProjectRoot "resources\resource.rc"))) -ne 0) {
+                throw "rc.exe failed to compile resource.rc"
+            }
+            $BuiltNewObj = $true
         }
 
         [string[]]$cflags = @("/nologo", "/std:c++23", "/O2", "/Oi", "/Ot", "/utf-8", "/EHsc", "/I", (Join-Path $ProjectRoot "src"))
         foreach ($d in $CommonDefines) { $cflags += "/D$d" }
 
-        [string[]]$AllObjs = Invoke-ParallelCompile -Sources $AllSources -CompilerExe "cl.exe" -BaseFlags $cflags -IsMsvc $true
-        [string[]]$EngineObjs = $AllObjs[0..($EngineSources.Count - 1)]
+        [string[]]$UnitObjs   = Invoke-ParallelCompile -Sources $CompileUnits -CompilerExe "cl.exe" -BaseFlags $cflags -IsMsvc $true -HeaderCutoffUtc $LatestHeaderUtc -CleanAll $ForceCleanRebuild
+        [string[]]$EngineObjs = $UnitObjs[0..($EngineSources.Count - 1)]
+        [string[]]$AllObjs    = if ($buildGame) { $UnitObjs[0..($EngineSources.Count + $AppSources.Count - 1)] } else { [string[]]@() }
+        $testObj              = if ($buildTests) { $UnitObjs[$UnitObjs.Count - 1] } else { "" }
 
-        $testObj = Join-Path $ObjDir "tests_NativeParityTests_cpp.obj"
-        if ((Invoke-CleanNativeStep "cl.exe" ($cflags + @("/c", (Join-Path $ProjectRoot "tests\NativeParityTests.cpp"), "/Fo$testObj"))) -ne 0) {
-            throw "Kompilasi tes gagal"
+        if ($buildTests) {
+            $testNeedLink = $ForceCleanRebuild -or -not (Test-Path $TestExe) -or ((Get-Item $testObj).LastWriteTimeUtc -gt (Get-Item $TestExe).LastWriteTimeUtc)
+            if (-not $testNeedLink) {
+                $tTime = (Get-Item $TestExe).LastWriteTimeUtc
+                foreach ($eo in $EngineObjs) { if ((Get-Item $eo).LastWriteTimeUtc -gt $tTime) { $testNeedLink = $true; break } }
+            }
+            if ($testNeedLink) {
+                if ((Invoke-CleanNativeStep "link.exe" (@("/nologo", "/OUT:$TestExe", $testObj) + $EngineObjs)) -ne 0) {
+                    throw "Linking CapLab13Tests.exe gagal"
+                }
+                Write-StageRow "[LINK]" "CapLab13Tests.exe updated" "DarkGray"
+            }
         }
 
-        if ((Invoke-CleanNativeStep "link.exe" (@("/nologo", "/OUT:$TestExe", $testObj) + $EngineObjs)) -ne 0) {
-            throw "Linking CapLab13Tests.exe gagal"
-        }
-
-        [string[]]$libArgs = @($WinLibs | ForEach-Object { "$_.lib" })
-        if ((Invoke-CleanNativeStep "link.exe" (@("/nologo", "/MANIFEST:NO", "/SUBSYSTEM:WINDOWS", "/OUT:$TargetExe") + $AllObjs + @($resOut) + $libArgs)) -ne 0) {
-            throw "Linking CapLab13Native.exe gagal"
+        if ($buildGame) {
+            $nativeNeedLink = $ForceCleanRebuild -or $BuiltNewObj -or -not (Test-Path $TargetExe)
+            if (-not $nativeNeedLink) {
+                $nTime = (Get-Item $TargetExe).LastWriteTimeUtc
+                foreach ($ao in $AllObjs) { if ((Get-Item $ao).LastWriteTimeUtc -gt $nTime) { $nativeNeedLink = $true; break } }
+            }
+            if ($nativeNeedLink) {
+                [string[]]$libArgs = @($WinLibs | ForEach-Object { "$_.lib" })
+                if ((Invoke-CleanNativeStep "link.exe" (@("/nologo", "/MANIFEST:NO", "/SUBSYSTEM:WINDOWS", "/OUT:$TargetExe") + $AllObjs + @($resOut) + $libArgs)) -ne 0) {
+                    throw "Linking CapLab13Native.exe gagal"
+                }
+                Write-StageRow "[LINK]" "CapLab13Native.exe updated" "DarkGray"
+            }
         }
     } else {
         $cxx = if ($ToolMode -eq "CLANG") { "clang++.exe" } else { "g++.exe" }
         $windres = if (Get-Command llvm-windres.exe -ErrorAction SilentlyContinue) { "llvm-windres.exe" } else { "windres.exe" }
         $resOut = Join-Path $ObjDir "resource.res.o"
-        if ((Invoke-CleanNativeStep $windres @("-I", (Join-Path $ProjectRoot "resources"), (Join-Path $ProjectRoot "resources\resource.rc"), "-O", "coff", "-o", $resOut)) -ne 0) {
-            throw "$windres gagal mengompilasi resource.rc"
+        if ($buildGame -and (-not (Test-ResourceUpToDate -ResFile $resOut -ProjectRoot $ProjectRoot))) {
+            if ((Invoke-CleanNativeStep $windres @("-I", (Join-Path $ProjectRoot "resources"), (Join-Path $ProjectRoot "resources\resource.rc"), "-O", "coff", "-o", $resOut)) -ne 0) {
+                throw "$windres failed to compile resource.rc"
+            }
+            $BuiltNewObj = $true
         }
 
         $marchFlag = "-march=x86-64"
         [string[]]$cflags = @("-std=c++23", "-O3", $marchFlag, "-mtune=generic", "-I", (Join-Path $ProjectRoot "src"))
         foreach ($d in $CommonDefines) { $cflags += "-D$d" }
 
-        [string[]]$AllObjs = Invoke-ParallelCompile -Sources $AllSources -CompilerExe $cxx -BaseFlags $cflags -IsMsvc $false
-        [string[]]$EngineObjs = $AllObjs[0..($EngineSources.Count - 1)]
-
-        $testObj = Join-Path $ObjDir "tests_NativeParityTests_cpp.o"
-        if ((Invoke-CleanNativeStep $cxx ($cflags + @("-c", (Join-Path $ProjectRoot "tests\NativeParityTests.cpp"), "-o", $testObj))) -ne 0) {
-            throw "Kompilasi tes gagal"
-        }
+        [string[]]$UnitObjs   = Invoke-ParallelCompile -Sources $CompileUnits -CompilerExe $cxx -BaseFlags $cflags -IsMsvc $false -HeaderCutoffUtc $LatestHeaderUtc -CleanAll $ForceCleanRebuild
+        [string[]]$EngineObjs = $UnitObjs[0..($EngineSources.Count - 1)]
+        [string[]]$AllObjs    = if ($buildGame) { $UnitObjs[0..($EngineSources.Count + $AppSources.Count - 1)] } else { [string[]]@() }
+        $testObj              = if ($buildTests) { $UnitObjs[$UnitObjs.Count - 1] } else { "" }
 
         [string[]]$staticFlags = if ($DynamicFallback) {
             [string[]]@()
@@ -359,45 +558,86 @@ try {
             [string[]]@("-static-libgcc", "-static-libstdc++")
         }
 
-        $testRsp = Join-Path $BuildDir "link_tests.rsp"
-        [string[]]$testLinkArgs = @("-O3") + $staticFlags + $ExtraLinkFlags + @("-o", $TestExe, $testObj) + $EngineObjs
-        Write-LinkResponseFile -RspPath $testRsp -ArgsList $testLinkArgs
-        if ((Invoke-CleanNativeStep $cxx @("@$testRsp")) -ne 0) {
-            throw "Linking CapLab13Tests.exe gagal"
+        if ($buildTests) {
+            $testRsp = Join-Path $BuildDir "link_tests.rsp"
+            $testNeedLink = $ForceCleanRebuild -or -not (Test-Path $TestExe) -or ((Get-Item $testObj).LastWriteTimeUtc -gt (Get-Item $TestExe).LastWriteTimeUtc)
+            if (-not $testNeedLink) {
+                $tTime = (Get-Item $TestExe).LastWriteTimeUtc
+                foreach ($eo in $EngineObjs) { if ((Get-Item $eo).LastWriteTimeUtc -gt $tTime) { $testNeedLink = $true; break } }
+            }
+            if ($testNeedLink) {
+                [string[]]$testLinkArgs = @("-O3") + $staticFlags + $ExtraLinkFlags + @("-o", $TestExe, $testObj) + $EngineObjs
+                Write-LinkResponseFile -RspPath $testRsp -ArgsList $testLinkArgs
+                if ((Invoke-CleanNativeStep $cxx @("@$testRsp")) -ne 0) {
+                    throw "Linking CapLab13Tests.exe gagal"
+                }
+                Write-StageRow "[LINK]" "CapLab13Tests.exe updated (@link_tests.rsp)" "DarkGray"
+            }
         }
 
-        [string[]]$libArgs = @($WinLibs | ForEach-Object { "-l$_" })
-        $nativeRsp = Join-Path $BuildDir "link_native.rsp"
-        [string[]]$nativeLinkArgs = @("-O3", "-mwindows", "-municode") + $staticFlags + $ExtraLinkFlags + @("-o", $TargetExe) + $AllObjs + @($resOut) + $libArgs
-        Write-LinkResponseFile -RspPath $nativeRsp -ArgsList $nativeLinkArgs
-        if ((Invoke-CleanNativeStep $cxx @("@$nativeRsp")) -ne 0) {
-            throw "Linking CapLab13Native.exe gagal"
+        if ($buildGame) {
+            $nativeRsp = Join-Path $BuildDir "link_native.rsp"
+            $nativeNeedLink = $ForceCleanRebuild -or $BuiltNewObj -or -not (Test-Path $TargetExe)
+            if (-not $nativeNeedLink) {
+                $nTime = (Get-Item $TargetExe).LastWriteTimeUtc
+                foreach ($ao in $AllObjs) { if ((Get-Item $ao).LastWriteTimeUtc -gt $nTime) { $nativeNeedLink = $true; break } }
+            }
+            if ($nativeNeedLink) {
+                [string[]]$libArgs = @($WinLibs | ForEach-Object { "-l$_" })
+                [string[]]$nativeLinkArgs = @("-O3", "-mwindows", "-municode") + $staticFlags + $ExtraLinkFlags + @("-o", $TargetExe) + $AllObjs + @($resOut) + $libArgs
+                Write-LinkResponseFile -RspPath $nativeRsp -ArgsList $nativeLinkArgs
+                if ((Invoke-CleanNativeStep $cxx @("@$nativeRsp")) -ne 0) {
+                    throw "Linking CapLab13Native.exe gagal"
+                }
+                Write-StageRow "[LINK]" "CapLab13Native.exe updated (@link_native.rsp)" "DarkGray"
+            }
         }
     }
+    $LinkWatch.Stop()
 
-    if ($env:CAPLAB_RUN_TESTS -ne "0") {
-        Write-Host "  [Test] Menjalankan CapLab13Tests.exe..." -ForegroundColor Cyan
-        & $TestExe
+    # ========================================================================
+    # STAGE 3: PARITY & 120-MONTH STRESS SUITE
+    # ========================================================================
+    if ($buildTests -and $env:CAPLAB_RUN_TESTS -ne "0") {
+        Write-StageRow "[3/4] Parity" "Running CapLab13Tests.exe (C++23 parity + 120-month stress)..." "Cyan"
+        $testWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $testOut = & $TestExe 2>&1 | Out-String
         $testExit = $LASTEXITCODE
+        $testWatch.Stop()
+        [System.IO.File]::WriteAllText($ParityLog, $testOut, (New-Object System.Text.UTF8Encoding($false)))
+
         if ($testExit -ne 0) {
+            foreach ($tl in ($testOut -split "`r?`n")) {
+                if ($tl -and $tl.Trim() -ne "") { Write-Host "    $tl" -ForegroundColor Red }
+            }
             throw ("Parity tests gagal! (ExitCode={0} / 0x{1:X8})" -f $testExit, ([uint32]([int64]$testExit -band 0xFFFFFFFF)))
         }
+
+        if ($VerboseTests.IsPresent -or $env:CAPLAB_VERBOSE_TESTS -eq "1") {
+            foreach ($tl in ($testOut -split "`r?`n")) {
+                if ($tl -and $tl.Trim() -ne "") { Write-Host "    $tl" }
+            }
+        } else {
+            $summaryMatch = [regex]::Match($testOut, 'Summary:\s*(.+)')
+            $perfMatch    = [regex]::Match($testOut, '\[PERF\]\s*(.+)')
+            $sumText      = if ($summaryMatch.Success) { $summaryMatch.Groups[1].Value.Trim() } else { "All checks passed." }
+            $perfText     = if ($perfMatch.Success) { " | " + $perfMatch.Groups[1].Value.Trim() } else { "" }
+            Write-StageRow "[PASS]" "$sumText$perfText ($([math]::Round($testWatch.ElapsedMilliseconds)) ms)" "Green"
+        }
     } else {
-        Write-Host "  [Test] Verifikasi parity dilewati sesuai opsi installer." -ForegroundColor DarkYellow
+        Write-StageRow "[3/4] Parity" "Skipped via installer option or -Target Game." "DarkYellow"
     }
 } finally {
     $ErrorActionPreference = $prevErrorPref
 }
 
 # ============================================================================
-# STEP 3: FAST & CLEAN SHORTCUT CREATION
+# STAGE 4: SHORTCUT INTEGRATION & TELEMETRY SUMMARY
 # ============================================================================
-Write-Host ""
-if ($env:CAPLAB_CREATE_SHORTCUTS -eq "0") {
-    Write-Host "[3/3] Pembuatan shortcut dilewati sesuai opsi installer." -ForegroundColor DarkYellow
+if ($Target -eq "Tests" -or $env:CAPLAB_CREATE_SHORTCUTS -eq "0") {
+    Write-StageRow "[4/4] Package" "Desktop & Start Menu shortcuts skipped per option." "DarkYellow"
 } else {
-    Write-Host "[3/3] Membuat shortcut Desktop & Start Menu secara cepat..." -ForegroundColor Cyan
-
+    Write-StageRow "[4/4] Package" "Syncing Desktop & Start Menu shortcuts..." "Cyan"
     try {
         $Shell = New-Object -ComObject WScript.Shell
         $DesktopDir   = [Environment]::GetFolderPath("Desktop")
@@ -416,14 +656,14 @@ if ($env:CAPLAB_CREATE_SHORTCUTS -eq "0") {
             $sc.IconLocation     = "$TargetExe,0"
             $sc.Description      = "CapLab 13 - Simulasi Ekonomi & Konglomerasi 2.5D (Windows 11 Native)"
             $sc.Save()
-            Write-Host "  [Shortcut] $lnkPath" -ForegroundColor Green
+            Write-StageRow "[Shortcut]" "$lnkPath" "Green"
         }
     } catch {
-        Write-Host "  [Warn] Shortcut creation skipped ($($_.Exception.Message)); executable tetap siap di $TargetExe" -ForegroundColor DarkYellow
+        Write-StageRow "[Warn]" "Shortcut skipped ($($_.Exception.Message)); binary remains ready." "DarkYellow"
     }
 }
 
 $Stopwatch.Stop()
-$SizeMB = [math]::Round((Get-Item $TargetExe).Length / 1MB, 2)
-Write-Host ""
-Write-Host "[Done] Selesai dalam $([math]::Round($Stopwatch.Elapsed.TotalSeconds, 1)) detik | Binary: $TargetExe ($SizeMB MB)" -ForegroundColor Cyan
+$binTarget = if ($Target -eq "Tests") { $TestExe } else { $TargetExe }
+$SizeMB = if (Test-Path $binTarget) { [math]::Round((Get-Item $binTarget).Length / 1MB, 2) } else { 0 }
+Write-StageRow "[Done]" "Completed in $([math]::Round($Stopwatch.Elapsed.TotalSeconds, 1))s | Binary: $binTarget ($SizeMB MB)" "Cyan"

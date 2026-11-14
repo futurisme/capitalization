@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { SimulationState, Facility, MapParcel, FacilityType, ProductId, UnitType } from './types/game';
+import { SimulationState, Facility, MapParcel, FacilityType, ProductId, UnitType, CityBiome } from './types/game';
 import {
   generateDefaultState,
   saveGameStateToStorage,
@@ -18,6 +18,7 @@ import {
   buyVacantLandParcel,
   sellOwnedLandParcel,
 } from './engine/economyEngine';
+import { PRIMARY_CITY_ID, createNewCity, switchActiveCity } from './engine/governmentEngine';
 import { getDepositYieldBonus } from './engine/housingEcosystem';
 import { getParcelAt } from './engine/spatialGrid';
 import { roundCurrency, round2 } from './engine/precisionMath';
@@ -198,6 +199,7 @@ export default function App() {
       return;
     }
 
+    const activeCityId = state.activeCityId || PRIMARY_CITY_ID;
     const seq = buildSeqRef.current++;
     const facilityId = `fac_plyr_${state.currentTick}_${parcel.x}_${parcel.y}_${seq}`;
     const initialUnits = createDefaultUnitsForFacility(facilityType, targetProduct);
@@ -209,6 +211,7 @@ export default function App() {
     const newFacility: Facility = {
       id: facilityId,
       companyId: state.playerCompanyId,
+      cityId: activeCityId,
       name: `${spec.name} ${playerComp.ticker}`,
       type: facilityType,
       tileX: parcel.x,
@@ -271,7 +274,17 @@ export default function App() {
           }
         : p
     );
-    const updatedParcels = recalculateCityTraffic(markedParcels, nextFacilities);
+    const updatedParcels = recalculateCityTraffic(markedParcels, nextFacilities, 1.0, activeCityId);
+
+    const updatedCities = state.cities
+      ? {
+          ...state.cities,
+          [activeCityId]: {
+            ...(state.cities[activeCityId] || state.city),
+            mapParcels: updatedParcels,
+          },
+        }
+      : state.cities;
 
     const newState: SimulationState = {
       ...state,
@@ -281,13 +294,14 @@ export default function App() {
       },
       facilities: nextFacilities,
       mapParcels: updatedParcels,
+      cities: updatedCities,
       newsFeed: [
         {
           id: `news_build_${state.currentTick}_${seq}`,
           month: state.currentTick,
           category: 'economy' as const,
           title: `Konstruksi Baru: ${spec.name}`,
-          detail: `${playerComp.name} meresmikan ${spec.name} di kavling (${parcel.x}, ${parcel.y}) senilai $${spec.constructionCost.toLocaleString()}.`,
+          detail: `${playerComp.name} meresmikan ${spec.name} di ${state.city.name} (${parcel.x}, ${parcel.y}) senilai $${spec.constructionCost.toLocaleString()}.`,
         },
         ...state.newsFeed,
       ].slice(0, 25),
@@ -442,20 +456,37 @@ export default function App() {
     const updatedFacilities = { ...state.facilities };
     delete updatedFacilities[facilityId];
 
-    const updatedParcels = recalculateCityTraffic(
-      state.mapParcels.map(p =>
-        p.facilityId === facilityId
-          ? { ...p, facilityId: undefined, ownerCompanyId: undefined }
-          : p
-      ),
-      updatedFacilities
-    );
+    const activeCityId = fac.cityId || state.activeCityId || PRIMARY_CITY_ID;
+    const isSameCity = activeCityId === (state.activeCityId || PRIMARY_CITY_ID);
+    const updatedParcels = isSameCity
+      ? recalculateCityTraffic(
+          state.mapParcels.map(p =>
+            p.facilityId === facilityId
+              ? { ...p, facilityId: undefined, ownerCompanyId: undefined, landStatus: 'for_sale' as const }
+              : p
+          ),
+          updatedFacilities,
+          1.0,
+          activeCityId
+        )
+      : state.mapParcels;
 
     const updatedPlayerComp = {
       ...playerComp,
       cash: roundCurrency(playerComp.cash + refund),
       facilitiesCount: Math.max(0, playerComp.facilitiesCount - 1),
     };
+
+    const updatedCities =
+      state.cities && isSameCity
+        ? {
+            ...state.cities,
+            [activeCityId]: {
+              ...(state.cities[activeCityId] || state.city),
+              mapParcels: updatedParcels,
+            },
+          }
+        : state.cities;
 
     const newState: SimulationState = {
       ...state,
@@ -465,6 +496,7 @@ export default function App() {
       },
       facilities: updatedFacilities,
       mapParcels: updatedParcels,
+      cities: updatedCities,
     };
 
     setState(newState);
@@ -537,6 +569,37 @@ export default function App() {
     [showToast]
   );
 
+  const handleSwitchCity = useCallback(
+    (cityId: string) => {
+      const res = switchActiveCity(stateRef.current, cityId);
+      if (!res.success || !res.updatedState) {
+        showToast(res.message, true);
+        return;
+      }
+      setInspectingFacilityId(null);
+      setState(res.updatedState);
+      saveGameStateToStorage(res.updatedState);
+      showToast(res.message);
+    },
+    [showToast]
+  );
+
+  const handleCreateCity = useCallback(
+    (name: string, biome: CityBiome) => {
+      const res = createNewCity(stateRef.current, name, biome);
+      if (!res.success || !res.updatedState) {
+        showToast(res.message, true);
+        return false;
+      }
+      setInspectingFacilityId(null);
+      setState(res.updatedState);
+      saveGameStateToStorage(res.updatedState);
+      showToast(res.message);
+      return true;
+    },
+    [showToast]
+  );
+
   const playerFacilitiesCount = useMemo(
     () =>
       Object.values(state.facilities).filter(f => f.companyId === state.playerCompanyId).length,
@@ -568,7 +631,7 @@ export default function App() {
       {/* Non-blocking In-App Notification Toast */}
       {toastMsg && (
         <div
-          className={`fixed top-24 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-24px)] max-w-md px-3.5 py-2.5 rounded-xl border shadow-xl flex items-center gap-2 text-xs animate-fade-in ${
+          className={`fixed bottom-20 md:bottom-14 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-24px)] max-w-md px-3.5 py-2.5 rounded-xl border shadow-xl flex items-center gap-2 text-xs animate-fade-in ${
             toastMsg.isError
               ? 'bg-rose-950 border-rose-700 text-rose-200'
               : 'bg-slate-900 border-sky-600/80 text-slate-100'
@@ -612,6 +675,8 @@ export default function App() {
               onDemolishResident={handleDemolishResident}
               onBuyLand={handleBuyLand}
               onSellLand={handleSellLand}
+              onSwitchCity={handleSwitchCity}
+              onCreateCity={handleCreateCity}
             />
           )}
 

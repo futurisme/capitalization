@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { SimulationState, ProductId, BrandStrategy, ExecutiveRole } from '../types/game';
-import { PRODUCTS, AVAILABLE_EXECUTIVES } from '../engine/productsData';
+import { PRODUCTS, AVAILABLE_EXECUTIVES, CITY_BIOME_META } from '../engine/productsData';
 import { formatMoney, roundCurrency } from '../engine/precisionMath';
 import {
   saveGameStateToStorage,
@@ -9,6 +9,15 @@ import {
   importStateFromJSON,
   generateDefaultState,
 } from '../engine/saveSystem';
+import {
+  getSubsidiariesOf,
+  updateSubsidiaryDirective,
+  appointSubsidiaryCEO,
+  transferCapitalToSubsidiary,
+  spinOffSubsidiaryIPO,
+  DEFAULT_SUBSIDIARY_DIRECTIVE,
+} from '../engine/subsidiaryEngine';
+import { createInitialGovernment, lobbyGovernmentPolicy } from '../engine/governmentEngine';
 import {
   Building2,
   Save,
@@ -23,6 +32,9 @@ import {
   UserCheck,
   UserMinus,
   Monitor,
+  GitBranch,
+  Landmark,
+  Shield,
 } from 'lucide-react';
 import { CEOIcon, ProductIcon } from './IconHelper';
 import { LeaderboardView } from './LeaderboardView';
@@ -41,12 +53,41 @@ export function CorporateHQView({
   const [importJsonText, setImportJsonText] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<
-    'profile' | 'executives' | 'ranking' | 'tech' | 'save_system'
+    'profile' | 'executives' | 'subsidiaries' | 'government' | 'ranking' | 'tech' | 'save_system'
   >('profile');
   const [confirmReset, setConfirmReset] = useState(false);
+  const [spinName, setSpinName] = useState('');
+  const [spinTicker, setSpinTicker] = useState('');
+  const [selectedSpinFacIds, setSelectedSpinFacIds] = useState<string[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const player = state.companies[state.playerCompanyId];
+
+  const subsidiaries = useMemo(
+    () => getSubsidiariesOf(state, state.playerCompanyId),
+    [state, state.playerCompanyId]
+  );
+
+  const availableInvestorsForCeo = useMemo(() => {
+    return (state.aiEntityOrder || [])
+      .map(id => state.aiEntities?.[id])
+      .filter((e): e is NonNullable<typeof e> => Boolean(e && e.role === 'investor'))
+      .sort((a, b) => b.opsSkill + b.financeSkill - (a.opsSkill + a.financeSkill))
+      .slice(0, 12);
+  }, [state.aiEntities, state.aiEntityOrder]);
+
+  const playerOperationalFacilities = useMemo(
+    () =>
+      Object.values(state.facilities).filter(
+        f => f.companyId === state.playerCompanyId && f.type !== 'corporate_hq'
+      ),
+    [state.facilities, state.playerCompanyId]
+  );
+
+  const government = useMemo(
+    () => state.government || createInitialGovernment(state),
+    [state]
+  );
 
   const notify = useCallback((msg: string) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -203,8 +244,10 @@ export function CorporateHQView({
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar bg-[#11192c] p-1 rounded-xl border border-slate-800/80">
         {(
           [
-            { id: 'profile', label: 'Profil & Merek', icon: Building2 },
+            { id: 'profile', label: 'Profil', icon: Building2 },
             { id: 'executives', label: 'C-Suite', icon: Users },
+            { id: 'subsidiaries', label: `Anak Usaha (${subsidiaries.length})`, icon: GitBranch },
+            { id: 'government', label: 'Pemerintah', icon: Landmark },
             { id: 'ranking', label: 'Peringkat', icon: Award },
             { id: 'tech', label: 'Riset & R&D', icon: Cpu },
             { id: 'save_system', label: 'Simpan', icon: Save },
@@ -217,7 +260,7 @@ export function CorporateHQView({
               key={tab.id}
               type="button"
               onClick={() => setActiveSection(tab.id)}
-              className={`flex-1 min-w-[96px] min-h-[40px] px-2.5 rounded-lg font-bold flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors ${
+              className={`flex-1 min-w-[92px] min-h-[40px] px-2.5 rounded-lg font-bold flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors ${
                 active
                   ? 'bg-sky-600 text-white'
                   : 'text-slate-400 hover:text-slate-200'
@@ -443,6 +486,346 @@ export function CorporateHQView({
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {activeSection === 'subsidiaries' && player && (
+        <div className="space-y-4">
+          <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <GitBranch className="w-4 h-4 text-sky-400" />
+                <h3 className="font-bold text-sm text-white">Kendali CEO atas Anak Usaha (&gt;=50%)</h3>
+              </div>
+              <span className="font-mono text-[10px] text-slate-400">
+                {subsidiaries.length} Anak Usaha Aktif
+              </span>
+            </div>
+
+            {subsidiaries.length === 0 ? (
+              <div className="text-slate-400 text-[11px] py-3">
+                Anda belum menguasai &gt;=50% saham perusahaan lain. Beli &gt;=50% saham di Bursa Efek atau lakukan Spin-Off IPO fasilitas di bawah ini.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {subsidiaries.map(({ company: sub, ownershipPct }) => {
+                  const dir = sub.subsidiaryDirective || DEFAULT_SUBSIDIARY_DIRECTIVE;
+                  return (
+                    <div
+                      key={sub.id}
+                      className="bg-[#0d1526] border border-slate-800 rounded-xl p-3.5 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-bold text-xs text-white flex items-center gap-1.5">
+                            <span>{sub.name}</span>
+                            <span className="font-mono text-sky-400">({sub.ticker})</span>
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 text-[9px] font-mono">
+                              Kendali {ownershipPct}%
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5 font-mono tabular-nums">
+                            CEO: {sub.ceoName} · Kas {formatMoney(sub.cash)} · Profit {formatMoney(sub.lastMonthNetProfit)}/bln
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const res = transferCapitalToSubsidiary(state, state.playerCompanyId, sub.id, 500000);
+                            if (res.success && res.updatedState) onStateUpdate(res.updatedState);
+                            notify(res.message);
+                          }}
+                          className="min-h-[34px] px-2.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[10px] font-bold"
+                        >
+                          Injeksi Modal +$500K
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
+                        <div className="space-y-1">
+                          <span className="text-slate-400 block">Kebijakan Ekspansi:</span>
+                          <div className="flex gap-1">
+                            {(['aggressive', 'balanced', 'cash_cow'] as const).map(mode => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => {
+                                  const res = updateSubsidiaryDirective(state, state.playerCompanyId, sub.id, { expansionMode: mode });
+                                  if (res.success && res.updatedState) onStateUpdate(res.updatedState);
+                                  notify(res.message);
+                                }}
+                                className={`flex-1 min-h-[28px] rounded border font-semibold capitalize ${
+                                  dir.expansionMode === mode
+                                    ? 'bg-sky-600 border-sky-400 text-white'
+                                    : 'bg-slate-900 border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                {mode === 'cash_cow' ? 'Cash' : mode === 'aggressive' ? 'Agresif' : 'Seimbang'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-slate-400 block">Strategi Harga Ritel:</span>
+                          <div className="flex gap-1">
+                            {(['discount', 'market', 'premium'] as const).map(ps => (
+                              <button
+                                key={ps}
+                                type="button"
+                                onClick={() => {
+                                  const res = updateSubsidiaryDirective(state, state.playerCompanyId, sub.id, { priceStrategy: ps });
+                                  if (res.success && res.updatedState) onStateUpdate(res.updatedState);
+                                  notify(res.message);
+                                }}
+                                className={`flex-1 min-h-[28px] rounded border font-semibold capitalize ${
+                                  dir.priceStrategy === ps
+                                    ? 'bg-amber-600 border-amber-400 text-white'
+                                    : 'bg-slate-900 border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                {ps}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-slate-400 block">Rasio Dividen &amp; CEO:</span>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const res = updateSubsidiaryDirective(state, state.playerCompanyId, sub.id, {
+                                  dividendPayoutRatio: dir.dividendPayoutRatio >= 0.7 ? 0.25 : 0.75,
+                                });
+                                if (res.success && res.updatedState) onStateUpdate(res.updatedState);
+                                notify(res.message);
+                              }}
+                              className="px-2 min-h-[28px] rounded border bg-slate-900 border-slate-700 text-emerald-300 font-mono"
+                            >
+                              Div {Math.round(dir.dividendPayoutRatio * 100)}%
+                            </button>
+                            {availableInvestorsForCeo[0] && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const res = appointSubsidiaryCEO(
+                                    state,
+                                    state.playerCompanyId,
+                                    sub.id,
+                                    availableInvestorsForCeo[0].id
+                                  );
+                                  if (res.success && res.updatedState) onStateUpdate(res.updatedState);
+                                  notify(res.message);
+                                }}
+                                className="flex-1 min-h-[28px] px-2 rounded border bg-slate-900 border-sky-700/70 text-sky-300 font-semibold truncate"
+                              >
+                                Tunjuk CEO: {availableInvestorsForCeo[0].name.split(' ')[0]}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Spin-Off Facility to New Listed Subsidiary IPO */}
+          <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-3">
+            <h3 className="font-bold text-sm text-white">Spin-Off Fasilitas Menjadi Anak Usaha IPO (70% Induk)</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={spinName}
+                onChange={e => setSpinName(e.target.value)}
+                placeholder="Nama Anak Usaha (mis: Nusantara Tech Tbk)"
+                className="min-h-[38px] px-3 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs"
+              />
+              <input
+                type="text"
+                value={spinTicker}
+                onChange={e => setSpinTicker(e.target.value.toUpperCase())}
+                maxLength={5}
+                placeholder="Ticker Bursa (mis: NTEC)"
+                className="min-h-[38px] px-3 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs uppercase"
+              />
+            </div>
+
+            {playerOperationalFacilities.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-[160px] overflow-y-auto">
+                {playerOperationalFacilities.map(fac => {
+                  const checked = selectedSpinFacIds.includes(fac.id);
+                  return (
+                    <button
+                      key={fac.id}
+                      type="button"
+                      onClick={() =>
+                        setSelectedSpinFacIds(prev =>
+                          prev.includes(fac.id) ? prev.filter(id => id !== fac.id) : [...prev, fac.id]
+                        )
+                      }
+                      className={`p-2 rounded-xl border text-left text-[11px] flex items-center justify-between ${
+                        checked
+                          ? 'bg-sky-950/60 border-sky-500 text-white'
+                          : 'bg-[#0d1526] border-slate-800 text-slate-300'
+                      }`}
+                    >
+                      <span className="truncate font-semibold">{fac.name}</span>
+                      <span className="font-mono text-[10px] text-emerald-400 shrink-0">
+                        {formatMoney(fac.monthlyProfit)}/bln
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-[11px] text-slate-400">Bangun minimal 1 fasilitas operasional untuk di-spin-off ke bursa.</div>
+            )}
+
+            <button
+              type="button"
+              disabled={selectedSpinFacIds.length === 0}
+              onClick={() => {
+                const res = spinOffSubsidiaryIPO(
+                  state,
+                  state.playerCompanyId,
+                  spinName || 'Nusa Venture Tbk',
+                  spinTicker || `SUB${subsidiaries.length + 1}`,
+                  selectedSpinFacIds,
+                  1500000
+                );
+                if (res.success && res.updatedState) {
+                  onStateUpdate(res.updatedState);
+                  setSelectedSpinFacIds([]);
+                  setSpinName('');
+                  setSpinTicker('');
+                }
+                notify(res.message);
+              }}
+              className="w-full min-h-[42px] rounded-xl bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-xs"
+            >
+              Laksanakan Spin-Off IPO ({selectedSpinFacIds.length} Fasilitas · Modal Awal $1.5M)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeSection === 'government' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-sm text-white">
+                <Shield className="w-4 h-4 text-rose-400" />
+                <span>Kabinet Pemerintahan Nasional</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-1 font-mono tabular-nums text-[10px]">
+                <div className="bg-[#0d1526] p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block font-sans">Presiden Republik</span>
+                  <span className="text-xs font-bold text-white font-sans">{government.presidentName}</span>
+                </div>
+                <div className="bg-[#0d1526] p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block font-sans">Menteri Ketenagakerjaan</span>
+                  <span className="text-xs font-bold text-sky-300 font-sans">{government.ministerOfLaborName}</span>
+                </div>
+                <div className="bg-[#0d1526] p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block font-sans">Pajak Korporasi</span>
+                  <span className="text-xs font-bold text-amber-400">{(government.corporateTaxRate * 100).toFixed(0)}%</span>
+                </div>
+                <div className="bg-[#0d1526] p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block font-sans">Subsidi Riset R&amp;D</span>
+                  <span className="text-xs font-bold text-emerald-400">+{(government.rdSubsidyRate * 100).toFixed(0)}%</span>
+                </div>
+                <div className="bg-[#0d1526] p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block font-sans">Upah Minimum</span>
+                  <span className="text-xs font-bold text-slate-200">${government.minimumWageFloor.toLocaleString()}</span>
+                </div>
+                <div className="bg-[#0d1526] p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block font-sans">Pemilu Berikutnya</span>
+                  <span className="text-xs font-bold text-teal-300">Bulan #{government.nextElectionTick}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-2.5">
+              <div className="font-bold text-sm text-white">Lobi Kebijakan Pemerintah ($350K / Dekrit)</div>
+              <p className="text-[11px] text-slate-400">
+                Ajukan usulan insentif ekonomi kepada Presiden, Menaker, atau Wali Kota aktif.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { id: 'tax_cut', label: 'Potong Pajak (-2%)' },
+                    { id: 'rd_grant', label: 'Hibah R&D (+5%)' },
+                    { id: 'land_grant', label: 'Diskon Lahan Kota (+5%)' },
+                    { id: 'wage_moderation', label: 'Moderasi Upah (-$200)' },
+                  ] as const
+                ).map(btn => (
+                  <button
+                    key={btn.id}
+                    type="button"
+                    onClick={() => {
+                      const res = lobbyGovernmentPolicy(state, btn.id);
+                      if (res.success && res.updatedState) onStateUpdate(res.updatedState);
+                      notify(res.message);
+                    }}
+                    className="min-h-[42px] px-2.5 rounded-xl bg-slate-800 hover:bg-sky-600 border border-slate-700 text-white font-bold text-[11px] transition-colors"
+                  >
+                    {btn.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-2.5">
+            <h3 className="font-bold text-sm text-white">
+              Kota &amp; Pemerintah Daerah ({(state.cityOrder || ['city_metro_1']).length}/10 Kota)
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {(state.cityOrder || ['city_metro_1']).map(cId => {
+                const cObj = state.cities?.[cId] || state.city;
+                const biomeLabel = cObj.biome ? CITY_BIOME_META[cObj.biome]?.label : 'Metropolis';
+                return (
+                  <div
+                    key={cId}
+                    className="bg-[#0d1526] border border-slate-800 rounded-xl p-3 space-y-1 font-mono tabular-nums text-[10px]"
+                  >
+                    <div className="flex items-center justify-between font-sans">
+                      <span className="font-bold text-xs text-white">{cObj.name}</span>
+                      <span className="text-sky-400 font-semibold text-[10px]">{biomeLabel}</span>
+                    </div>
+                    <div className="text-teal-300 font-sans">Wali Kota: {cObj.mayorName || 'Pj. Daerah'}</div>
+                    <div className="flex justify-between text-slate-400 pt-1">
+                      <span>Pop {(cObj.population / 1_000_000).toFixed(2)}M</span>
+                      <span>Diskon Lahan {Math.round((cObj.landGrantDiscount || 0) * 100)}%</span>
+                      <span>Publik {cObj.approvalRating || 72}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-[#11192c] border border-slate-800/80 rounded-2xl p-4 space-y-2">
+            <h3 className="font-bold text-xs text-slate-200">Lembaran Negara &amp; Pemilu</h3>
+            <div className="space-y-1.5 max-h-[180px] overflow-y-auto divide-y divide-slate-800/60 text-[11px]">
+              {government.policyLog.map(log => (
+                <div key={log.id} className="pt-1.5 first:pt-0 flex items-start justify-between gap-2">
+                  <div>
+                    <span className="font-bold text-sky-300">{log.actorName}</span>{' '}
+                    <span className="text-slate-500">({log.roleTitle}):</span>{' '}
+                    <span className="text-slate-300">{log.summary}</span>
+                  </div>
+                  <span className="font-mono text-[10px] text-slate-500 shrink-0">Bln {log.month}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

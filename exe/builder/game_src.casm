@@ -110,7 +110,7 @@ _start:
     call wfind_after_slash
     mov word [rax], 0
 
-    ; 2. scriptPath = exeDir + "builder\\build_pipeline.bat"
+    ; 2. scriptPath = exeDir + "installer\\LaunchInstaller.bat"
     lea rcx, [rip + scriptPath]
     lea rdx, [rip + exeDir]
     call wstrcpy
@@ -124,7 +124,7 @@ _start:
     cmp eax, 0xFFFFFFFF
     je err_missing
 
-    ; 4. cmdParams = "/k \"\"" + scriptPath + "\"\""
+    ; 4. cmdParams = "/c \"\"" + scriptPath + "\"\""
     lea rcx, [rip + cmdParams]
     lea rdx, [rip + str_cmd_prefix]
     call wstrcpy

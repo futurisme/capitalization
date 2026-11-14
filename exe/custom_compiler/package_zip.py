@@ -2,16 +2,18 @@
 """
 Creates reproducible, ultra-lightweight ZIP distributions of /exe:
   1) public/downloads/CapLab13_Windows11_Native.zip (served by web app)
-  2) exe/CapLab13_Windows11_Native.zip (local package inside /exe)
-Always recompiles & verifies exe/game.exe using the custom PE64 compiler first.
+  2) public/exe/CapLab13_Windows11_Native.zip (served directly under /exe)
+  3) exe/CapLab13_Windows11_Native.zip (local package inside /exe)
+Always compiles & verifies both WINDOWS_GUI (game.exe) and WINDOWS_CUI (cli_probe.casm)
+via the proprietary zero-third-party Custom PE64 Compiler first.
 """
 
 from __future__ import annotations
 
 import pathlib
+import shutil
 import zipfile
 
-import shutil
 from custom_pe64_compiler import compile_casm_to_pe64
 from verify_pe64 import verify_pe64
 
@@ -26,7 +28,13 @@ def build_and_package(root: pathlib.Path) -> None:
     game_exe = exe_dir / "game.exe"
 
     compile_casm_to_pe64(game_src, game_exe)
-    verify_pe64(game_exe)
+    verify_pe64(game_exe, expected_subsystem=2, require_launcher_imports=True)
+
+    cli_probe_src = exe_dir / "builder" / "cli_probe.casm"
+    if cli_probe_src.exists():
+        probe_out = exe_dir / "build_native" / "CapLab13CliProbe.exe"
+        compile_casm_to_pe64(cli_probe_src, probe_out)
+        verify_pe64(probe_out, expected_subsystem=3, require_launcher_imports=False)
 
     # Mirror custom-setup-agent to public/exe/custom_setup_agent for direct website /exe access
     agent_src = exe_dir / "custom_setup_agent" / "SetupAgent.ps1"

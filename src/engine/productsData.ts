@@ -72,6 +72,34 @@ export const PRODUCTS: Record<ProductId, ProductRecipe> = {
     appealWeights: { price: 0.40, quality: 0.55, brand: 0.05 },
     description: 'Mineral semikonduktor krusial untuk mikroprosesor dan chip canggih.',
   },
+  timber: {
+    id: 'timber',
+    name: 'Kayu Gelondongan',
+    category: 'raw',
+    unit: 'Kubik',
+    icon: 'timber',
+    baseCost: 54,
+    basePrice: 92,
+    seaportPrice: 110,
+    elasticity: 0.75,
+    demandFactor: 0.26,
+    appealWeights: { price: 0.65, quality: 0.25, brand: 0.10 },
+    description: 'Kayu hutan industri berkelanjutan untuk penggergajian papan & furnitur.',
+  },
+  coffee_bean: {
+    id: 'coffee_bean',
+    name: 'Biji Kopi Hijau',
+    category: 'raw',
+    unit: 'Karung',
+    icon: 'coffee_bean',
+    baseCost: 110,
+    basePrice: 185,
+    seaportPrice: 220,
+    elasticity: 0.9,
+    demandFactor: 0.22,
+    appealWeights: { price: 0.45, quality: 0.45, brand: 0.10 },
+    description: 'Hasil perkebunan kopi arabika & robusta untuk industri pemanggangan kopi.',
+  },
 
   // --- Intermediate Goods ---
   flour: {
@@ -167,6 +195,39 @@ export const PRODUCTS: Record<ProductId, ProductRecipe> = {
     ],
     description: 'Modul penyimpanan daya lithium & surya untuk kendaraan listrik serta jaringan kota.',
   },
+  lumber: {
+    id: 'lumber',
+    name: 'Papan Kayu Olahan',
+    category: 'intermediate',
+    unit: 'Kubik',
+    icon: 'lumber',
+    baseCost: 115,
+    basePrice: 195,
+    seaportPrice: 230,
+    elasticity: 0.85,
+    demandFactor: 0.24,
+    appealWeights: { price: 0.55, quality: 0.35, brand: 0.10 },
+    inputs: [{ productId: 'timber', amount: 1.5 }],
+    description: 'Kayu gergajian presisi untuk industri furnitur & konstruksi gedung.',
+  },
+  solar_panel: {
+    id: 'solar_panel',
+    name: 'Panel Surya Fotovoltaik',
+    category: 'intermediate',
+    unit: 'Panel',
+    icon: 'solar_panel',
+    baseCost: 225,
+    basePrice: 380,
+    seaportPrice: 445,
+    elasticity: 1.25,
+    demandFactor: 0.18,
+    appealWeights: { price: 0.35, quality: 0.55, brand: 0.10 },
+    inputs: [
+      { productId: 'silicon', amount: 1.2 },
+      { productId: 'steel', amount: 0.4 },
+    ],
+    description: 'Modul fotovoltaik efisiensi tinggi untuk energi bersih & bangunan modern.',
+  },
 
   // --- Consumer Products (Sold to City Market) ---
   bread: {
@@ -199,6 +260,21 @@ export const PRODUCTS: Record<ProductId, ProductRecipe> = {
     inputs: [{ productId: 'plastic', amount: 0.03 }],
     description: 'Minuman ringan dengan margin tinggi yang sangat dipengaruhi kekuatan merek & iklan.',
   },
+  roasted_coffee: {
+    id: 'roasted_coffee',
+    name: 'Kopi Panggang Artisan',
+    category: 'consumer',
+    unit: 'Pak',
+    icon: 'roasted_coffee',
+    baseCost: 9,
+    basePrice: 22,
+    seaportPrice: 27,
+    elasticity: 1.45,
+    demandFactor: 0.68,
+    appealWeights: { price: 0.30, quality: 0.35, brand: 0.35 },
+    inputs: [{ productId: 'coffee_bean', amount: 0.04 }],
+    description: 'Kopi sangrai premium kemasan ritel dengan margin kuat di kawasan CBD & suburban.',
+  },
   fashion_apparel: {
     id: 'fashion_apparel',
     name: 'Busana & Fashion Branded',
@@ -213,6 +289,24 @@ export const PRODUCTS: Record<ProductId, ProductRecipe> = {
     appealWeights: { price: 0.25, quality: 0.25, brand: 0.50 },
     inputs: [{ productId: 'fabric', amount: 0.15 }],
     description: 'Lini busana modern dengan sensitivitas sangat tinggi terhadap Brand Rating.',
+  },
+  furniture: {
+    id: 'furniture',
+    name: 'Furnitur & Meja Kerja',
+    category: 'consumer',
+    unit: 'Set',
+    icon: 'furniture',
+    baseCost: 145,
+    basePrice: 340,
+    seaportPrice: 410,
+    elasticity: 1.5,
+    demandFactor: 0.11,
+    appealWeights: { price: 0.35, quality: 0.35, brand: 0.30 },
+    inputs: [
+      { productId: 'lumber', amount: 0.7 },
+      { productId: 'fabric', amount: 0.25 },
+    ],
+    description: 'Perabotan rumah tangga dan kantor modern untuk kota dengan pertumbuhan hunian cepat.',
   },
   medicine: {
     id: 'medicine',
@@ -286,6 +380,25 @@ export const PRODUCTS: Record<ProductId, ProductRecipe> = {
     ],
     description: 'Kendaraan listrik mewah dengan nilai transaksi per unit terbesar di kota.',
   },
+  ev_suv: {
+    id: 'ev_suv',
+    name: 'SUV Listrik Jarak Jauh',
+    category: 'consumer',
+    unit: 'Unit',
+    icon: 'ev_suv',
+    baseCost: 16800,
+    basePrice: 36000,
+    seaportPrice: 42500,
+    elasticity: 2.3,
+    demandFactor: 0.004,
+    appealWeights: { price: 0.20, quality: 0.50, brand: 0.30 },
+    inputs: [
+      { productId: 'steel', amount: 9.0 },
+      { productId: 'battery_cell', amount: 5.0 },
+      { productId: 'electronic_chip', amount: 4.5 },
+    ],
+    description: 'SUV listrik flagship bertenaga baterai kapasitas tinggi dengan margin eksekutif.',
+  },
 
   // --- Digital Age Software Products ---
   software_os: {
@@ -316,6 +429,20 @@ export const PRODUCTS: Record<ProductId, ProductRecipe> = {
     appealWeights: { price: 0.20, quality: 0.65, brand: 0.15 },
     description: 'Platform SaaS Enterprise dengan pendapatan langganan bulanan bernilai tinggi.',
   },
+  fintech_app: {
+    id: 'fintech_app',
+    name: 'Platform Pembayaran FinTech',
+    category: 'digital',
+    unit: 'Lisensi',
+    icon: 'fintech_app',
+    baseCost: 14,
+    basePrice: 95,
+    seaportPrice: 120,
+    elasticity: 1.7,
+    demandFactor: 0.22,
+    appealWeights: { price: 0.25, quality: 0.45, brand: 0.30 },
+    description: 'Aplikasi keuangan digital & transaksi ritel multi-kota berbiaya marginal rendah.',
+  },
 };
 
 export interface FacilityBuildingSpec {
@@ -339,7 +466,7 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 450000,
     monthlyMaintenance: 15000,
     description: 'Toko ritel ringkas untuk kebutuhan pokok harian. Sangat diuntungkan keramaian tinggi.',
-    allowedProducts: ['bread', 'soft_drink'],
+    allowedProducts: ['bread', 'soft_drink', 'roasted_coffee'],
   },
   store_pharmacy: {
     type: 'store_pharmacy',
@@ -349,7 +476,7 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 780000,
     monthlyMaintenance: 24000,
     description: 'Gerai ritel farmasi & kesehatan dengan permintaan defensif saat ekonomi melambat.',
-    allowedProducts: ['medicine', 'soft_drink'],
+    allowedProducts: ['medicine', 'soft_drink', 'roasted_coffee'],
   },
   store_electronics: {
     type: 'store_electronics',
@@ -359,7 +486,7 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 1200000,
     monthlyMaintenance: 35000,
     description: 'Outlet ritel berteknologi tinggi untuk smartphone, laptop, dan perangkat digital.',
-    allowedProducts: ['smartphone', 'laptop', 'software_os'],
+    allowedProducts: ['smartphone', 'laptop', 'software_os', 'fintech_app', 'solar_panel'],
   },
   store_department: {
     type: 'store_department',
@@ -369,7 +496,7 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 2500000,
     monthlyMaintenance: 65000,
     description: 'Pusat belanja serba ada skala besar dengan daya tampung pelanggan tinggi.',
-    allowedProducts: ['fashion_apparel', 'medicine', 'bread', 'soft_drink', 'smartphone'],
+    allowedProducts: ['fashion_apparel', 'furniture', 'roasted_coffee', 'medicine', 'bread', 'soft_drink', 'smartphone'],
   },
   store_auto: {
     type: 'store_auto',
@@ -379,7 +506,7 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 3400000,
     monthlyMaintenance: 85000,
     description: 'Galeri pamer khusus penjualan kendaraan listrik & mobilitas premium.',
-    allowedProducts: ['automobile'],
+    allowedProducts: ['automobile', 'ev_suv'],
   },
   apartment_complex: {
     type: 'apartment_complex',
@@ -430,8 +557,8 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     icon: 'factory_processing',
     constructionCost: 1800000,
     monthlyMaintenance: 45000,
-    description: 'Mengolah material hulu menjadi barang setengah jadi (Tepung, Baja, Plastik, Tekstil).',
-    allowedProducts: ['flour', 'steel', 'plastic', 'fabric'],
+    description: 'Mengolah material hulu menjadi barang setengah jadi (Tepung, Baja, Plastik, Tekstil, Papan Kayu).',
+    allowedProducts: ['flour', 'steel', 'plastic', 'fabric', 'lumber', 'roasted_coffee'],
   },
   factory_assembly: {
     type: 'factory_assembly',
@@ -440,8 +567,8 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     icon: 'factory_assembly',
     constructionCost: 3200000,
     monthlyMaintenance: 75000,
-    description: 'Merakit produk konsumen bernilai tinggi (Chip AI, Baterai, Obat, Gadget, Laptop, Mobil).',
-    allowedProducts: ['electronic_chip', 'battery_cell', 'medicine', 'bread', 'soft_drink', 'fashion_apparel', 'smartphone', 'laptop', 'automobile'],
+    description: 'Merakit produk konsumen & teknologi bernilai tinggi (Chip, Baterai, Panel Surya, Furnitur, Obat, Gadget, EV).',
+    allowedProducts: ['electronic_chip', 'battery_cell', 'solar_panel', 'furniture', 'medicine', 'bread', 'soft_drink', 'roasted_coffee', 'fashion_apparel', 'smartphone', 'laptop', 'automobile', 'ev_suv'],
   },
   warehouse_logistics: {
     type: 'warehouse_logistics',
@@ -451,17 +578,17 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 1100000,
     monthlyMaintenance: 24000,
     description: 'Mengonsolidasi stok rantai pasok internal dan efisiensi distribusi antar fasilitas (+30% kapasitas).',
-    allowedProducts: ['flour', 'steel', 'plastic', 'electronic_chip', 'battery_cell', 'fabric', 'medicine', 'bread', 'soft_drink', 'smartphone'],
+    allowedProducts: ['flour', 'steel', 'plastic', 'lumber', 'solar_panel', 'electronic_chip', 'battery_cell', 'fabric', 'medicine', 'bread', 'soft_drink', 'roasted_coffee', 'furniture', 'smartphone'],
   },
   farm_agriculture: {
     type: 'farm_agriculture',
-    name: 'Perkebunan & Peternakan',
+    name: 'Perkebunan, Hutan & Peternakan',
     category: 'raw',
     icon: 'farm_agriculture',
     constructionCost: 950000,
     monthlyMaintenance: 22000,
-    description: 'Memproduksi gandum dan hasil peternakan secara mandiri sebagai hulu pangan.',
-    allowedProducts: ['wheat', 'livestock'],
+    description: 'Memproduksi gandum, ternak, kayu gelondongan, dan biji kopi sebagai hulu agrikultur.',
+    allowedProducts: ['wheat', 'livestock', 'timber', 'coffee_bean'],
   },
   mine_extraction: {
     type: 'mine_extraction',
@@ -480,8 +607,8 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     icon: 'power_plant_green',
     constructionCost: 2300000,
     monthlyMaintenance: 38000,
-    description: 'Menjual listrik bersih ke kota sekaligus memproduksi Sel Baterai untuk industri otomotif & EV.',
-    allowedProducts: ['battery_cell'],
+    description: 'Menjual listrik bersih ke kota sekaligus memproduksi Sel Baterai dan Panel Surya.',
+    allowedProducts: ['battery_cell', 'solar_panel'],
   },
   tech_software: {
     type: 'tech_software',
@@ -490,8 +617,8 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     icon: 'tech_software',
     constructionCost: 2200000,
     monthlyMaintenance: 60000,
-    description: 'Studio Digital Age: membangun Sistem Operasi & AI Enterprise dengan margin berulang.',
-    allowedProducts: ['software_os', 'ai_enterprise'],
+    description: 'Studio Digital Age: membangun Sistem Operasi, FinTech App, & AI Enterprise berulang.',
+    allowedProducts: ['software_os', 'ai_enterprise', 'fintech_app'],
   },
   media_telecom: {
     type: 'media_telecom',
@@ -511,7 +638,7 @@ export const FACILITY_SPECS: Record<FacilityType, FacilityBuildingSpec> = {
     constructionCost: 3000000,
     monthlyMaintenance: 80000,
     description: 'Meneliti paten produk baru dan menaikkan Tech Level serta Kualitas produk korporasi.',
-    allowedProducts: ['medicine', 'battery_cell', 'smartphone', 'laptop', 'automobile', 'electronic_chip', 'software_os', 'ai_enterprise', 'bread', 'soft_drink', 'fashion_apparel'],
+    allowedProducts: ['medicine', 'battery_cell', 'solar_panel', 'smartphone', 'laptop', 'automobile', 'ev_suv', 'electronic_chip', 'software_os', 'ai_enterprise', 'fintech_app', 'bread', 'soft_drink', 'roasted_coffee', 'furniture', 'fashion_apparel'],
   },
   corporate_hq: {
     type: 'corporate_hq',
@@ -561,8 +688,48 @@ export const AVAILABLE_EXECUTIVES: Omit<ExecutiveOfficer, 'hired'>[] = [
 ];
 
 export const MAX_ACTIVE_COMPANIES = 10;
+export const MAX_CITIES = 10;
+export const MAX_AI_ENTITIES = 100;
 export const GOVT_OWNER_ID = 'govt_city';
 export const RESIDENT_OWNER_ID = 'resident_citizen';
+
+export const CITY_BIOME_META = {
+  coastal_metro: {
+    label: 'Metropolitan Pesisir',
+    wageBase: 4800,
+    popBase: 2150000,
+    foundCost: 3500000,
+    desc: 'Pusat perdagangan maritim dengan CBD padat & akses pelabuhan.',
+  },
+  industrial_heartland: {
+    label: 'Jantung Industri',
+    wageBase: 4100,
+    popBase: 1450000,
+    foundCost: 2800000,
+    desc: 'Kawasan manufaktur berat dengan upah kompetitif & deposit bijih besi.',
+  },
+  highland_mining: {
+    label: 'Dataran Tinggi Tambang',
+    wageBase: 4300,
+    popBase: 1120000,
+    foundCost: 2600000,
+    desc: 'Kaya cadangan silikon, minyak bumi, dan logam strategis.',
+  },
+  agri_valley: {
+    label: 'Lembah Agrikultur',
+    wageBase: 3650,
+    popBase: 1280000,
+    foundCost: 2400000,
+    desc: 'Tanah aluvial subur untuk kopi, gandum, ternak, dan hutan kayu.',
+  },
+  tech_corridor: {
+    label: 'Koridor Inovasi Digital',
+    wageBase: 5400,
+    popBase: 1680000,
+    foundCost: 3800000,
+    desc: 'Populasi berdaya beli tinggi untuk gadget, EV SUV, dan produk digital.',
+  },
+} as const;
 
 export const RESOURCE_DEPOSIT_META = {
   iron_ore: { label: 'Bijih Besi / Coal', shortLabel: 'IRON', color: '#94a3b8', accent: '#cbd5e1', suitedFor: 'mine_extraction' },
