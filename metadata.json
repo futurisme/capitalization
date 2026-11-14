@@ -1,0 +1,6 @@
+{
+  "name": "CapLab Mobile: 2.5D Business Simulation Engine",
+  "description": "Simulasi bisnis konglomerasi ekonomi mendalam terinspirasi Capitalism Lab, berfitur engine peta isometrik 2.5D ultra ringan, AI kompetitor cerdas, bursa saham real-time, dan tata kelola unit bisnis di ponsel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

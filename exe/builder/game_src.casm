@@ -1,0 +1,169 @@
+; CapLab 13 Script Builder Launcher (game.exe)
+; Compiled independently by CapLab Custom PE64 Compiler (zero Microsoft/3P tools)
+; Elevates Command Prompt (cmd.exe) in Administrator mode and runs:
+;   1) Check & download missing build tools
+;   2) Parallel native build & verification of CapLab13Native.exe
+;   3) Desktop & Start Menu shortcut creation
+
+.subsystem WINDOWS_GUI
+
+.manifest
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    version="13.0.0.0"
+    processorArchitecture="amd64"
+    name="CapLab13.ScriptBuilder"
+    type="win32"
+  />
+  <description>CapLab 13 Interactive Setup GUI &amp; Build Agent</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
+    </windowsSettings>
+  </application>
+</assembly>
+.end_manifest
+
+.imports
+KERNEL32.dll: GetModuleFileNameW, GetFileAttributesW, ExitProcess
+SHELL32.dll: ShellExecuteW
+USER32.dll: MessageBoxW
+
+.rdata
+str_rel_script wstring "installer\\LaunchInstaller.bat"
+str_cmd_prefix wstring "/c \"\""
+str_cmd_suffix wstring "\"\""
+str_runas      wstring "runas"
+str_cmd        wstring "cmd.exe"
+str_title      wstring "CapLab 13 Native Installer"
+str_missing    wstring "File installer\\LaunchInstaller.bat tidak ditemukan di folder game.exe. Ekstrak seluruh isi file ZIP ke folder yang sama lalu jalankan game.exe kembali."
+str_uac_fail   wstring "Gagal membuka Installer Administrator. Pastikan izin Administrator (UAC) disetujui untuk melanjutkan instalasi."
+
+.data
+exeDir     resb 2048
+scriptPath resb 2048
+cmdParams  resb 4096
+
+.text
+; wchar_t* wstrcpy(rcx=dst, rdx=src) -> rax points to null terminator
+wstrcpy:
+    mov ax, [rdx]
+    mov [rcx], ax
+    test ax, ax
+    jz wstrcpy_done
+    add rcx, 2
+    add rdx, 2
+    jmp wstrcpy
+wstrcpy_done:
+    mov rax, rcx
+    ret
+
+; wchar_t* wfind_after_slash(rcx=str) -> rax points right after last '\\'
+wfind_after_slash:
+    mov rax, rcx
+slash_loop:
+    mov dx, [rcx]
+    test dx, dx
+    jz slash_done
+    cmp dx, 0x5C
+    jne slash_next
+    lea rax, [rcx + 2]
+slash_next:
+    add rcx, 2
+    jmp slash_loop
+slash_done:
+    ret
+
+_start:
+    push rbx
+    push rsi
+    push rdi
+    push r12
+    sub rsp, 0x38
+
+    ; 1. Resolve directory containing game.exe
+    xor ecx, ecx
+    lea rdx, [rip + exeDir]
+    mov r8d, 1020
+    call [rip + GetModuleFileNameW]
+    test eax, eax
+    jz err_missing
+
+    lea rcx, [rip + exeDir]
+    call wfind_after_slash
+    mov word [rax], 0
+
+    ; 2. scriptPath = exeDir + "builder\\build_pipeline.bat"
+    lea rcx, [rip + scriptPath]
+    lea rdx, [rip + exeDir]
+    call wstrcpy
+    mov rcx, rax
+    lea rdx, [rip + str_rel_script]
+    call wstrcpy
+
+    ; 3. Verify script exists on disk
+    lea rcx, [rip + scriptPath]
+    call [rip + GetFileAttributesW]
+    cmp eax, 0xFFFFFFFF
+    je err_missing
+
+    ; 4. cmdParams = "/k \"\"" + scriptPath + "\"\""
+    lea rcx, [rip + cmdParams]
+    lea rdx, [rip + str_cmd_prefix]
+    call wstrcpy
+    mov rcx, rax
+    lea rdx, [rip + scriptPath]
+    call wstrcpy
+    mov rcx, rax
+    lea rdx, [rip + str_cmd_suffix]
+    call wstrcpy
+
+    ; 5. Launch Command Prompt in Administrator mode ("runas")
+    xor ecx, ecx
+    lea rdx, [rip + str_runas]
+    lea r8, [rip + str_cmd]
+    lea r9, [rip + cmdParams]
+    lea rax, [rip + exeDir]
+    mov qword [rsp + 0x20], rax
+    mov qword [rsp + 0x28], 1
+    call [rip + ShellExecuteW]
+    cmp rax, 32
+    jbe err_uac
+
+    xor ecx, ecx
+    call [rip + ExitProcess]
+
+err_missing:
+    xor ecx, ecx
+    lea rdx, [rip + str_missing]
+    lea r8, [rip + str_title]
+    mov r9d, 0x10
+    call [rip + MessageBoxW]
+    mov ecx, 2
+    call [rip + ExitProcess]
+
+err_uac:
+    xor ecx, ecx
+    lea rdx, [rip + str_uac_fail]
+    lea r8, [rip + str_title]
+    mov r9d, 0x30
+    call [rip + MessageBoxW]
+    mov ecx, 1
+    call [rip + ExitProcess]
